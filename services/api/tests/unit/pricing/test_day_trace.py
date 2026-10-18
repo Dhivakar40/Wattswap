@@ -40,10 +40,11 @@ def test_midnight_price_is_inventory_driven_and_matches_the_hand_calculation(
     day: list[Tick],
 ) -> None:
     t = at(day, 0)
-    # S_eff = 0.5 * (24 kWh / 12 h) = 1.0 kW; D = 0.55 * 0.35 * 5 = 0.9625 kW; 150000 * 0.9625^0.6
+    # S_eff = 0.5 * (24 kWh / 12 h) = 1.0 kW; D = 4.5 * 0.55 = 2.475 kW; 150000 * 2.475^0.6
     assert t.drivers["supply"]["generation_kw"] == "0.000000"
     assert t.drivers["supply"]["effective_kw"] == "1.000000"
-    assert t.raw_price == t.price == 146_599
+    assert t.drivers["demand"]["demand_kw"] == "2.475000"
+    assert t.raw_price == t.price == 258_367
     assert t.breaker.mode == Mode.NORMAL
 
 
@@ -56,12 +57,12 @@ def test_sunrise_lowers_the_raw_price_as_generation_arrives(day: list[Tick]) -> 
 
 def test_noon_matches_the_hand_calculation(day: list[Tick]) -> None:
     t = at(day, 12 * 3600)
-    # GHI 900, 30 C -> T_cell 57, derate 0.872, gen 3.1392 kW; S_eff = 4.1392; D = 1.225
+    # GHI 900, 30 C -> T_cell 57, derate 0.872, gen 3.1392 kW; S_eff = 4.1392; D = 4.5 * 0.70 = 3.15; ratio 0.761
     assert t.drivers["supply"]["generation_kw"] == "3.139200"
     assert t.drivers["supply"]["effective_kw"] == "4.139200"
-    assert t.drivers["demand"]["demand_kw"] == "1.225000"
-    assert t.raw_price == 72_248
-    assert abs(t.price - t.raw_price) < 20  # smoothed price has converged on the raw price
+    assert t.drivers["demand"]["demand_kw"] == "3.150000"
+    assert t.raw_price == 127_329  # float cross-check: 127329.12
+    assert abs(t.price - t.raw_price) < 50  # smoothed price has converged on the raw price
 
 
 def test_a_sudden_cloud_event_spikes_raw_flags_an_anomaly_and_is_rate_limited(
@@ -88,27 +89,28 @@ def test_a_sudden_cloud_event_spikes_raw_flags_an_anomaly_and_is_rate_limited(
 def test_the_price_recovers_after_the_cloud_and_the_anomaly_clears(day: list[Tick]) -> None:
     after = at(day, CLOUD_END)
     assert (
-        after.raw_price < 80_000 < after.price
+        after.raw_price < 130_000 < after.price
     )  # raw already back down, applied still catching up
     assert after.drivers["smoothing"]["limiter"]["direction"] == "down"
     cleared = at(day, 14 * 3600)
     assert cleared.breaker.mode == Mode.NORMAL and cleared.band_bps == 150
-    assert abs(cleared.price - cleared.raw_price) < 100
+    assert abs(cleared.price - cleared.raw_price) < 150
 
 
 def test_sunset_price_rises_toward_the_evening_peak_but_is_nowhere_near_the_ceiling(
     day: list[Tick],
 ) -> None:
     t = at(day, 18 * 3600 + 1800)
-    assert t.raw_price == 206_030 and 200_000 < t.price < 210_000
-    assert t.price < P.p_ceiling // 2
+    assert t.raw_price == 363_108 and 350_000 < t.price < 370_000  # evening peak, thin supply
+    assert t.price < P.p_ceiling
     assert t.drivers["supply"]["effective_kw"] == "1.160000"  # ~0 generation + 1.0 inventory + ...
 
 
 def test_the_whole_day_obeys_the_hard_invariants(day: list[Tick]) -> None:
     prices = [t.price for t in day]
     assert all(P.p_floor <= p <= P.p_ceiling for p in prices)
-    assert max(prices) < P.p_ceiling // 2 and min(prices) > P.p_floor  # never pinned to a bound
+    assert max(prices) == 401_556 and min(prices) == 126_798  # never pinned to a bound
+    assert max(prices) < P.p_ceiling * 7 // 10 and min(prices) > P.p_floor
     # per-tick limit, exactly
     for a, b in pairwise(prices):
         assert abs(b - a) * 10_000 <= a * P.max_step_bps
@@ -120,7 +122,9 @@ def test_the_whole_day_obeys_the_hard_invariants(day: list[Tick]) -> None:
     assert worst < P.move_bps
     # the day contains exactly one anomaly episode and never a freeze
     kinds = [e["kind"] for t in day for e in t.events]
-    assert kinds.count("anomaly_start") >= 1 and "breaker_frozen" not in kinds
+    # two episodes: the cloud arriving (12:30) and the cloud clearing (13:15)
+    assert kinds.count("anomaly_start") == 2 and kinds.count("anomaly_end") == 2
+    assert "breaker_frozen" not in kinds
     assert all(t.breaker.mode != Mode.FROZEN for t in day)
 
 

@@ -110,8 +110,7 @@ def supply_terms(inputs: MarketInputs, p: PricingParams) -> SupplyTerms:
 # --------------------------------------------------------------------------- demand side
 @dataclass(frozen=True)
 class DemandTerms:
-    load_kw: Decimal  # profile-driven baseline (scaled installed capacity + base demand)
-    base_kw: Decimal  # the part of load_kw that does not depend on installed capacity
+    load_kw: Decimal  # base_demand_kw x the time-of-day load profile (independent of installed PV)
     bids_kw: Decimal  # open bid volume spread over the bid horizon
     velocity_kw: Decimal  # recent fills, weighted
     demand_kw: Decimal  # D
@@ -120,7 +119,12 @@ class DemandTerms:
 
 
 def demand_terms(inputs: MarketInputs, p: PricingParams) -> DemandTerms:
-    load = ZERO
+    """D = base_demand_kw x profile(local solar hour) + open bids + fill velocity.
+
+    Demand does NOT depend on the installed capacity: consumers exist whether or not there are
+    panels. The profile's local hour is the capacity-weighted mean over the market's cells (or
+    the hour at longitude 0 when the market has no meters yet).
+    """
     weighted_mult = ZERO
     weighted_hour = ZERO
     installed = ZERO
@@ -128,7 +132,6 @@ def demand_terms(inputs: MarketInputs, p: PricingParams) -> DemandTerms:
         cap_kw = D(c.capacity_w) / THOUSAND
         hour = local_solar_hour(inputs.market_time, c.center_lon_e6)
         mult = load_multiplier(p.load_profile, hour)
-        load += mult * p.demand_scale * cap_kw
         weighted_mult += mult * cap_kw
         weighted_hour += hour * cap_kw
         installed += cap_kw
@@ -140,11 +143,10 @@ def demand_terms(inputs: MarketInputs, p: PricingParams) -> DemandTerms:
     hour_mean = (
         weighted_hour / installed if installed > 0 else local_solar_hour(inputs.market_time, 0)
     )
-    base = p.base_demand_kw * mult_mean
-    load += base
+    load = p.base_demand_kw * mult_mean
     bids = D(inputs.open_bid_wh) / THOUSAND / p.bid_horizon_hours
     velocity = p.velocity_weight * D(inputs.recent_fill_wh) / THOUSAND / p.velocity_window_hours
-    return DemandTerms(load, base, bids, velocity, load + bids + velocity, mult_mean, hour_mean)
+    return DemandTerms(load, bids, velocity, load + bids + velocity, mult_mean, hour_mean)
 
 
 # ------------------------------------------------------------------------------ raw price
@@ -161,7 +163,9 @@ class RawPrice:
 
 def raw_price(s: SupplyTerms, d: DemandTerms, p: PricingParams) -> RawPrice:
     """P_raw = P_base * (D / S_eff) ** epsilon, ratio capped, clamped to [floor, ceiling]."""
-    neutral = s.installed_kw == 0 and s.supply_kw == 0 and d.demand_kw == 0
+    # Nobody on either side of the market (no meters, no inventory, no bids, no fills): there is
+    # nothing to price, so quote the neutral base price rather than a scarcity price.
+    neutral = s.installed_kw == 0 and s.supply_kw == 0 and d.bids_kw == 0 and d.velocity_kw == 0
     if neutral:
         ratio_uncapped = ratio = ONE
         capped = False

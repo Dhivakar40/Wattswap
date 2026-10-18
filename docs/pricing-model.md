@@ -50,12 +50,14 @@ with installed capacity `cap_c` (kW) and weather `G_c` (W/m², `shortwave_radiat
 5. **Effective supply**  `S = w_gen · Gen + w_inv · I_kW`, floored: `S_min = max(s_min_kw, s_min_frac · installed_kW)`,
    `S_eff = max(S, S_min)`. The floor means the ratio never divides by ~0.
 6. **Demand**  `D = D_load + D_bids + D_velocity` where
-   `D_load = Σ_c  profile(local_solar_hour_c) · demand_scale · cap_c  +  base_demand_kw · profile(mean)`,
-   `D_bids = open_bid_kWh / bid_horizon_hours`,
+   `D_load = base_demand_kw · profile(h)`: **base demand times the time-of-day load profile, and nothing else**,
+   `D_bids = open_bid_kWh / bid_horizon_hours` (the order book, Phase 4),
    `D_velocity = velocity_weight · recent_fill_kWh / velocity_window_hours`.
-   `local_solar_hour = (UTC hour + longitude/15) mod 24`; `profile` is linear between 24 hourly points.
+   `h` is the local solar hour, `(UTC hour + longitude/15) mod 24`, averaged over the market's cells weighted by their
+   capacity (the hour at longitude 0 if the market has no meters yet); `profile` is linear between 24 hourly points.
+   **Demand does not depend on how many meters are installed**: consumers exist whether or not there are panels.
 7. **Raw price**  `P_raw = P_base · (min(D / S_eff, ratio_cap)) ^ ε`, rounded half-even to an integer and clamped
-   to `[P_floor, P_ceiling]`. If the market is completely empty (no meters, no inventory, no demand) the ratio is 1,
+   to `[P_floor, P_ceiling]`. If nobody is in the market at all (no meters, no inventory, no bids, no fills) the ratio is 1,
    so the price is `P_base`.
 8. **EMA**  `EMA_t = α · P_raw,t + (1 − α) · EMA_{t−1}` (seeded with the first raw price).
 9. **Rate limiter**  `P_t` moves from `P_{t−1}` toward `round(EMA_t)` by at most
@@ -64,12 +66,37 @@ with installed capacity `cap_c` (kW) and weather `G_c` (W/m², `shortwave_radiat
 10. **Realized volatility**  `σ = sqrt(mean(r²)) · sqrt(ticks per hour) · 10 000` (bps per √hour), with
     `r_i = ln(P_i / P_{i−1})` over the last `vol_window` ticks; published on every tick and as a Prometheus gauge.
 
-Because demand is proportional to the installed base by default (consumers are modelled as the prosumers
-themselves), **adding meters raises supply but leaves the raw price unchanged** when nobody holds inventory.
-The price reacts to inventory, weather, the time of day and the order book. Set `base_demand_kw` above 0 to model
-consumers who do not own panels: then more supply makes energy cheaper.
+Because demand is independent of the installed base, **the market reacts to supply**: registering meters adds
+generation against the same demand and lowers the price; removing them raises it (the table below, and a test).
 
-### Worked example: noon, and why the night is not the ceiling
+### Calibration: `base_demand_kw = 4.5`
+
+`base_demand_kw` is the one number that anchors the price level, so it is calibrated rather than guessed. The
+**demo fleet** is what `make sim` registers: **one 5 kW meter** (Chennai, nobody holding any WATT yet). The target is
+that on a **clear noon** (GHI 900 W/m², 30 °C, local solar hour 12) its raw price sits close to `P_base`, i.e. the
+demand/supply ratio is 1:
+
+* generation: `T_cell = 30 + 0.03·900 = 57 °C`, `derate = 1 − 0.004·(57 − 25) = 0.872`,
+  `Gen = 5 · 0.9 · 0.80 · 0.872 = 3.1392 kW`; with no inventory `S_eff = 3.1392 kW`;
+* demand at noon is `base_demand_kw · profile(12) = base_demand_kw · 0.70`;
+* ratio 1 needs `base_demand_kw = 3.1392 / 0.70 = 4.4846 kW`; rounded to **4.5 kW** (a readable number) the ratio is
+  `3.15 / 3.1392 = 1.0034` and the raw price `150 000 · 1.0034^0.6 =` **150 309** (+0.2 % over `P_base`).
+
+The same noon with larger fleets (more meters against the same 3.15 kW of demand):
+
+| fleet    | installed_kw | S_eff_kw | D_kw   | D/S    | raw price | vs P_base |
+|----------|--------------|----------|--------|--------|-----------|-----------|
+| 1 x 5 kW | 5            | 3.1392   | 3.1500 | 1.0034 | 150309    | +0.2%     |
+| 2 x 5 kW | 10           | 6.2784   | 3.1500 | 0.5017 | 99167     | -33.9%    |
+| 3 x 5 kW | 15           | 9.4176   | 3.1500 | 0.3345 | 77752     | -48.2%    |
+| 4 x 5 kW | 20           | 12.5568  | 3.1500 | 0.2509 | 65426     | -56.4%    |
+| 8 x 5 kW | 40           | 25.1136  | 3.1500 | 0.1254 | 43165     | -71.2%    |
+
+So every added 5 kW meter makes noon energy cheaper and every removed one makes it dearer, which is the market
+reacting to supply. To re-anchor the price level for a different fleet, change `base_demand_kw` through the admin API
+(the calibration above is a one-line recomputation: `Gen_noon / profile(12)`).
+
+### Worked example: noon, and what the night costs
 
 One 5 kW meter at longitude 0°, 24 kWh of WATT held, `P_base = 150 000`, `ε = 0.6`.
 
@@ -82,18 +109,26 @@ One 5 kW meter at longitude 0°, 24 kWh of WATT held, `P_base = 150 000`, `ε = 
 | Generation | 5 · 0.9 · 0.80 · 0.872 | **3.1392 kW** |
 | Inventory | 24 kWh / 12 h = 2 kW; × w_inv 0.5 | 1.0 kW |
 | Supply `S_eff` | 3.1392 + 1.0 (floor 0.5 not binding) | **4.1392 kW** |
-| Demand | profile(12) 0.70 · 0.35 · 5 | **1.225 kW** |
-| Ratio | 1.225 / 4.1392 | 0.29595 |
-| Raw price | 150 000 · 0.29595^0.6 | **72 248** (0.072248 mUSDC/kWh) |
+| Demand | 4.5 · profile(12) 0.70 | **3.15 kW** |
+| Ratio | 3.15 / 4.1392 | 0.76099 |
+| Raw price | 150 000 · 0.76099^0.6 | **127 329** (0.127329 mUSDC/kWh) |
 
-**Midnight**, no sun, same inventory: generation 0, `S_eff` = 1.0 kW, demand 0.55 · 0.35 · 5 = 0.9625 kW,
-ratio 0.9625, raw = 150 000 · 0.9625^0.6 = **146 599**: the night price is driven by the inventory that is left.
+(The stored WATT lowers the noon price from the calibration's 150 309 to 127 329.)
+
+**Midnight**, no sun, same inventory: generation 0, `S_eff` = 1.0 kW, demand 4.5 · 0.55 = 2.475 kW, ratio 2.475,
+raw = 150 000 · 2.475^0.6 = **258 367**: the night price is driven by the inventory that is left.
 
 **Midnight with nobody holding any WATT**: `S = 0`, so the floor applies: `S_eff = S_min = 0.5 kW` (10 % of 5 kW),
-ratio 1.925, raw = **222 203**. Scarce, so higher than the stocked night, but nowhere near the 600 000 ceiling.
+ratio 4.95, raw = **391 611**. Scarce, so higher than the stocked night, but below the 600 000 ceiling.
 
-**Absurd demand** (100 kWh of open bids in an hour): ratio capped at 10, raw = 150 000 · 10^0.6 = **597 161**,
-still below the ceiling; with `p_ceiling = 500 000` it would be reported as clamped (`raw_ceiling`).
+**Evening peak** (19:00, profile 1.15, demand 5.175 kW): with 24 kWh held, ratio 5.175, raw **402 196**; with nobody
+holding any WATT the ratio is 10.35, hits the cap of 10, and raw = 150 000 · 10^0.6 = **597 161**, just under the
+ceiling. This is the intended scarcity signal of a demand-heavy market with a small fleet (one 5 kW meter produces
+~25 kWh a day against ~90 kWh of demand); more meters or stored WATT bring it down. The cap and the floor `s_min_frac`
+are the knobs if a softer evening peak is wanted.
+
+**Absurd demand** (100 kWh of open bids in an hour): ratio capped at 10, raw = **597 161**; with
+`p_ceiling = 500 000` it would be reported as clamped (`raw_ceiling`).
 
 ## Smoothing, and why the limiter and the breaker agree
 
@@ -171,40 +206,42 @@ irradiance to 25 %, one tick every 15 s.
 
 | point               | time     | ghi     | S_eff_kw | D_kw     | raw    | ema        | applied | limiter | breaker | band_bps | raw_move_bps |
 |---------------------|----------|---------|----------|----------|--------|------------|---------|---------|---------|----------|--------------|
-| midnight            | 00:00:00 | 0.000   | 1.000000 | 0.962500 | 146599 | 146599.000 | 146599  | -       | NORMAL  | 150      | 0            |
-| sunrise             | 06:30:00 | 165.000 | 1.650980 | 1.531250 | 143375 | 143701.479 | 143701  | -       | NORMAL  | 150      | 234          |
-| noon                | 12:00:00 | 900.000 | 4.139200 | 1.225000 | 72248  | 72257.865  | 72258   | -       | NORMAL  | 150      | 14           |
-| cloud onset (+15 s) | 12:30:15 | 222.479 | 1.848679 | 1.207354 | 116165 | 87865.884  | 72305   | up      | ANOMALY | 450      | 6148         |
-| cloud (+10 min)     | 12:40:00 | 221.667 | 1.845768 | 1.201667 | 115946 | 115963.775 | 79679   | up      | ANOMALY | 450      | 19           |
-| cloud ends (+0 s)   | 13:15:00 | 860.000 | 4.021084 | 1.190000 | 72246  | 107343.692 | 112374  | down    | ANOMALY | 450      | 3780         |
-| anomaly cleared     | 14:00:00 | 800.000 | 3.840178 | 1.190000 | 74269  | 74222.018  | 74222   | -       | NORMAL  | 150      | 63           |
-| sunset              | 18:30:00 | 40.000  | 1.160000 | 1.968750 | 206030 | 205375.437 | 205375  | -       | NORMAL  | 150      | 319          |
+| midnight            | 00:00:00 | 0.000   | 1.000000 | 2.475000 | 258367 | 258367.000 | 258367  | -       | NORMAL  | 150      | 0            |
+| sunrise             | 06:30:00 | 165.000 | 1.650980 | 3.937500 | 252684 | 253259.758 | 253260  | -       | NORMAL  | 150      | 234          |
+| noon                | 12:00:00 | 900.000 | 4.139200 | 3.150000 | 127329 | 127347.223 | 127347  | -       | NORMAL  | 150      | 14           |
+| cloud onset (+15 s) | 12:30:15 | 222.479 | 1.848679 | 3.104625 | 204729 | 154854.639 | 127431  | up      | ANOMALY | 450      | 6148         |
+| cloud (+10 min)     | 12:40:00 | 221.667 | 1.845768 | 3.090000 | 204343 | 204374.522 | 140444  | up      | ANOMALY | 450      | 19           |
+| cloud ends (+0 s)   | 13:15:00 | 860.000 | 4.021084 | 3.060000 | 127326 | 189182.460 | 198129  | down    | ANOMALY | 450      | 3780         |
+| anomaly cleared     | 14:00:00 | 800.000 | 3.840178 | 3.060000 | 130892 | 130808.951 | 130809  | -       | NORMAL  | 150      | 63           |
+| sunset              | 18:30:00 | 40.000  | 1.160000 | 5.062500 | 363108 | 361953.781 | 361954  | -       | NORMAL  | 150      | 319          |
 
-Reading the table:
+Reading the table (the demand curve is now `4.5 kW × profile`, so it is high in the evening and low overnight):
 
-* **Midnight** – no sun; the price is the inventory-driven 146 599 (hand-computed above). The first tick has no
+* **Midnight** – no sun; the price is the inventory-driven 258 367 (hand-computed above). The first tick has no
   history, so the applied price equals the raw price.
-* **Sunrise (06:30)** – generation appears, supply grows, the raw price is already falling; the applied price
-  follows it by EMA, well inside the limiter (`limiter` is `-`).
-* **Noon** – raw 72 248 (hand-computed above); the smoothed price has converged to it.
-* **Cloud onset (+15 s)** – generation collapses to a quarter, so the raw price jumps from 72 248 to 116 165
-  (**+6148 bps** in one tick). The breaker moves `NORMAL → ANOMALY`, the band hint widens to 450 bps and an
+* **Sunrise (06:30)** – generation appears, but so does the morning demand ramp (profile 0.80 → 0.95); the raw price
+  barely moves (252 684) and the applied price follows it by EMA, well inside the limiter (`limiter` is `-`).
+* **Noon** – raw 127 329 (hand-computed above); the smoothed price has converged to it.
+* **Cloud onset (+15 s)** – generation collapses to a quarter, so the raw price jumps from 127 329 to 204 729
+  (**+6 148 bps** in one tick). The breaker moves `NORMAL → ANOMALY`, the band hint widens to 450 bps and an
   `anomaly_start` event is stored. The applied price barely moves: the limiter holds it to +0.25 % per tick.
-* **Cloud +10 min** – raw is flat at ≈ 115 900 and the applied price has climbed at the maximum rate (`limiter: up`),
+* **Cloud +10 min** – raw is flat at ≈ 204 300 and the applied price has climbed at the maximum rate (`limiter: up`),
   still far below raw: this is the damping working. The state is still `ANOMALY`.
-* **Cloud ends** – raw drops back to 72 246 immediately, but the applied price (112 374) is still catching up and now
-  falls at the limiter's maximum rate (`limiter: down`). The anomaly stays active because the raw price moved again.
-* **Anomaly cleared (14:00)** – the raw price has been quiet for `anomaly_hold_ticks`; `NORMAL`, band hint back to 150,
-  and the applied price has converged on raw.
-* **Sunset (18:30)** – generation gone, evening demand peak; raw 206 030, applied 205 375. Elevated, not the ceiling.
+* **Cloud ends** – raw drops back to 127 326 immediately, but the applied price (198 129) is still catching up and
+  now falls at the limiter's maximum rate (`limiter: down`). The first anomaly had already ended (12:49:45, quiet for
+  `anomaly_hold_ticks`); the raw drop is a second move above 15 % and starts a second episode at 13:15:00, which ends
+  at 13:34:45. The day therefore has exactly two `anomaly_start` and two `anomaly_end` events.
+* **Anomaly cleared (14:00)** – `NORMAL`, band hint back to 150, applied price converged on raw (130 809 vs 130 892).
+* **Sunset (18:30)** – generation gone, evening demand peak; raw 363 108 (hand-checked: S = 0.16 + 1.0, D = 4.5·1.125),
+  applied 361 954. Elevated, not the ceiling.
 
-Across the whole day: the applied price never leaves `[20 000, 600 000]` (it stays between 71 946 and 227 846), no tick
-changes it by more than 25 bps, and no 10-minute window of the applied price moves by 15 %.
+Across the whole day: the applied price never leaves `[20 000, 600 000]` (it stays between 126 798 and 401 556), no
+tick changes it by more than 25 bps, and no 10-minute window of the applied price moves by 15 %.
 
 ### The same day with a weather outage (10:00–12:00)
 
 Weather stops refreshing at 10:00 and ages. At **10:30:15** it is older than 30 minutes: `breaker_frozen`, the
-applied price is held at 74 878, the band hint widens, quotes keep being signed. At **12:00:00** weather is fresh:
+applied price is held at 131 965, the band hint widens, quotes keep being signed. At **12:00:00** weather is fresh:
 `breaker_recovering`; seven `RECOVERING` ticks follow (price still held), and at **12:01:45** (the eighth healthy
 tick) `breaker_recovered`: repricing resumes, through the limiter. One `breaker_frozen` and one `breaker_recovered`
 event are recorded.
@@ -217,7 +254,7 @@ Each tick carries a `drivers` object (JSONB in `price_ticks.drivers`, also on th
 | Key | Contents |
 |---|---|
 | `supply` | `generation_kw`, `inventory_kw`, `w_gen`, `w_inv`, weighted terms, `supply_kw`, `s_min_kw`, `effective_kw`, `floor_applied`, `installed_kw`, `inventory_wh`, `inventory_source` (`open_sells` / `held_balances` / `db_minted_fallback`) |
-| `demand` | `load_kw`, `base_kw`, `bids_kw`, `velocity_kw`, `demand_kw`, `open_bid_wh`, `recent_fill_wh` |
+| `demand` | `load_kw` (base demand × profile), `bids_kw`, `velocity_kw`, `demand_kw`, `open_bid_wh`, `recent_fill_wh` |
 | `price` | `ratio_uncapped`, `ratio`, `ratio_capped`, `neutral`, `epsilon`, `p_base`, `raw_unclamped`, `raw` |
 | `smoothing` | `ema` (display) and `ema_exact` (restart state), `alpha`, `target`, `previous`, `applied`, `held`, `limiter {applied, direction, max_up, max_down, max_step_bps}` |
 | `clamps` | which bounds acted: `s_min`, `ratio_cap`, `raw_floor`, `raw_ceiling`, `limiter_up`, `limiter_down`, `final_floor`, `final_ceiling`, `held` |
@@ -230,8 +267,8 @@ Each tick carries a `drivers` object (JSONB in `price_ticks.drivers`, also on th
 **Attribution.** Because `P_raw ∝ (D/S_eff)^ε`, `Δ ln P_raw = ε · (Δ ln D − Δ ln S_eff)` while no cap or clamp binds.
 The tick reports `from_demand_bps = ε · Δ ln D · 10⁴`, `from_supply_bps = −ε · Δ ln S_eff · 10⁴`, and splits the
 supply part between generation and inventory in proportion to their weighted changes. It is flagged
-`approximate` when a cap or clamp is active. Example (tested): 1 kWh of new open bids on a 0.9625 kW night adds
-`0.6 · ln(1.9625/0.9625) · 10⁴ = 4 274.6 bps` from demand and nothing from supply.
+`approximate` when a cap or clamp is active. Example (tested): 1 kWh of new open bids on a 2.475 kW night adds
+`0.6 · ln(3.475/2.475) · 10⁴ = 2 036.1 bps` from demand and nothing from supply.
 
 ## Parameters
 
@@ -254,8 +291,7 @@ strings; JSON floats are rejected.
 | `s_min_kw` | Absolute floor on effective supply | `0.1` | 0.001 .. 1000000 | kW |
 | `s_min_frac` | Floor on effective supply as a fraction of installed capacity | `0.10` | 0 .. 1 | - |
 | `ratio_cap` | Cap on demand/supply | `10` | 1 .. 1000 | - |
-| `demand_scale` | Baseline load as a fraction of installed capacity | `0.35` | 0.01 .. 10 | - |
-| `base_demand_kw` | Market demand independent of installed PV capacity | `0` | 0 .. 1000000 | kW |
+| `base_demand_kw` | Average market demand before the load profile (independent of installed PV) | `4.5` | 0 .. 1000000 | kW |
 | `load_profile` | 24 hourly demand multipliers by local solar hour | `24 hourly multipliers (see below)` | 0 .. 10 | - |
 | `bid_horizon_hours` | Open bid kWh are spread over this window | `1` | 0.1 .. 72 | h |
 | `velocity_weight` | Weight of recent fill velocity in demand | `0.5` | 0 .. 10 | - |
@@ -273,7 +309,7 @@ strings; JSON floats are rejected.
 | `halt_quotes_on_freeze` | Stop signing quotes while FROZEN (trading halts when they go stale) | `False` | - | - |
 | `tick_seconds` | Seconds between ticks | `15` | 1 .. 3600 | s |
 
-`load_profile` defaults (index = local solar hour, linear in between):
+`base_demand_kw` multiplies the profile; see *Calibration* above. `load_profile` defaults (index = local solar hour, linear in between):
 `0.55 0.52 0.50 0.50 0.52 0.60 | 0.80 0.95 0.90 0.80 0.72 0.70 | 0.70 0.68 0.68 0.72 0.80 0.95 | 1.10 1.15 1.05 0.90 0.75 0.62`.
 `tick_seconds` is set by `PRICING_TICK_SECONDS`, not through the API. Cross-parameter rules checked on every update:
 `p_floor < p_base < p_ceiling`; `p_floor · max_step_bps ≥ 10 000` (a step is at least one unit); `w_gen + w_inv > 0`;
@@ -344,8 +380,11 @@ accumulates up to 6 h of capacity, unmet load drains it) is a replay-only simpli
 
 ## Known limitations
 
-* Demand is a model, not a measurement: it scales with installed capacity (plus the optional `base_demand_kw`), the load
-  profile, open bids and fill velocity. Until Phase 4 the order book is empty, so bids and fills contribute 0.
+* Demand is a model, not a measurement: `base_demand_kw` × the load profile, plus open bids and fill velocity
+  (the order-book terms are 0 until Phase 4). It is calibrated on the demo fleet and must be re-anchored (admin API)
+  for a very different fleet size.
+* With a small fleet the evening is scarce: a demand-heavy market priced at ~2.7× `P_base` with some stored WATT, and
+  near the ceiling with none (see the worked example).
 * "Tradeable inventory" before Phase 4 is the WATT *held* by owners of active meters, which includes WATT they have no
   intention of selling. It becomes open sell volume as soon as sell orders exist.
 * `PriceOracle` is single-price; making it per-market is a contract change and is not part of this phase.

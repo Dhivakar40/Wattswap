@@ -232,7 +232,6 @@ def _step(
         },
         "demand": {
             "load_kw": ds(d.load_kw),
-            "base_kw": ds(d.base_kw),
             "bids_kw": ds(d.bids_kw),
             "velocity_kw": ds(d.velocity_kw),
             "demand_kw": ds(d.demand_kw),

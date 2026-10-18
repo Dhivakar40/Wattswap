@@ -77,7 +77,9 @@ async def test_a_tick_reaches_the_database_redis_pubsub_and_state(
         )
         assert d["weather"][0]["source"] == "live" and d["weather"][0]["age_s"] == 0
         hour = local_solar_hour(t1.market_time, 80_250_000)  # centre of the Chennai cell
-        expected_load = load_multiplier(DEFAULT_LOAD_PROFILE, hour) * D("0.35") * 5
+        expected_load = load_multiplier(DEFAULT_LOAD_PROFILE, hour) * D(
+            "4.5"
+        )  # base demand x profile
         assert D(d["demand"]["load_kw"]) == pytest.approx(expected_load, abs=D("0.000001"))
         assert t1.breaker.mode == Mode.NORMAL and t1.price == t1.raw_price
 
@@ -141,72 +143,77 @@ async def test_prices_and_money_are_integers_all_the_way_to_the_wire(
 
 
 # ====================================================================== supply comes from the DB
+def local_noon_in_chennai() -> float:
+    """Today (UTC) at the instant it is 12:00 local solar time in the Chennai grid cell (centre 80.25 E)."""
+    day = int(datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+    return float(day + 6 * 3600 + 39 * 60)  # 80.25 / 15 = 5 h 21 min east of UTC
+
+
 @respx.mock
-async def test_supply_reacts_when_meters_are_registered_or_deactivated(
+async def test_the_market_reacts_to_meters_being_added_and_removed(
     make_settings: SettingsFactory,
 ) -> None:
+    """Registered capacity is read from the database every tick; demand does not move with it."""
     async with Harness(make_settings()) as h:
         clock = FakeClock()
-        mock_weather(clock)
+        clock.t = local_noon_in_chennai()
+        mock_weather(clock, ghi=900, temp=30)  # a clear noon
         _, _, _, _ = await owner_with_meter(h, capacity_w=5000)
         svc = make_service(h, clock)
         await svc.poll_weather_once()
-        [t1] = await svc.tick_all()
-        assert t1.drivers["supply"]["generation_kw"] == "2.828800"
+        [one] = await svc.tick_all()
+        d1 = one.drivers
+        assert d1["local_solar_hour"] == "12.000" and d1["supply"]["generation_kw"] == "3.139200"
+        assert d1["demand"]["demand_kw"] == "3.150000"  # 4.5 kW x 0.70
+        # the demo fleet, at a clear noon, prices close to P_base (the calibration)
+        assert abs(one.raw_price - 150_000) * 200 < 150_000 and one.raw_price == 150_309
 
         # a second owner registers a 10 kW meter in the same cell: the NEXT tick sees 15 kW
         session2, meter2, _, _ = await owner_with_meter(h, capacity_w=10_000)
         clock.advance(15)
-        [t2] = await svc.tick_all()
-        assert t2.drivers["supply"]["generation_kw"] == "8.486400" and t2.supply_w > 2 * t1.supply_w
-        assert (
-            t2.drivers["weather"][0]["meters"] == 2
-            and t2.drivers["weather"][0]["capacity_w"] == 15_000
-        )
-        # default model: demand scales with the installed base too, so the RAW price is unchanged
-        assert (
-            abs(t2.raw_price - t1.raw_price) * 1000 < t1.raw_price
-        )  # <0.1 %: only the clock moved
+        [three] = await svc.tick_all()
+        d3 = three.drivers
+        assert d3["supply"]["generation_kw"] == "9.417600"
+        assert d3["weather"][0]["meters"] == 2 and d3["weather"][0]["capacity_w"] == 15_000
+        assert abs(D(d3["demand"]["demand_kw"]) - D("3.15")) < D("0.001")  # same demand
+        assert three.raw_price < one.raw_price  # more supply, same demand: cheaper
+        assert abs(three.raw_price - 77_752) * 1000 < 77_752  # hand-computed: ratio 0.3345
 
-        # deactivating it takes the supply away again
+        # removing it again takes the supply away and the price comes back
         r = await h.client.patch(
             f"/api/v1/meters/{meter2['id']}", json={"active": False}, headers=session2.headers
         )
         assert r.status_code == 200
         clock.advance(15)
-        [t3] = await svc.tick_all()
-        assert t3.drivers["supply"]["generation_kw"] == "2.828800"
+        [back] = await svc.tick_all()
+        assert back.drivers["supply"]["generation_kw"] == "3.139200"
+        assert back.raw_price > three.raw_price
+        assert abs(back.raw_price - one.raw_price) * 1000 < one.raw_price  # back to the original
+        assert three.supply_w > 2 * one.supply_w
 
 
 @respx.mock
-async def test_with_base_demand_added_supply_lowers_the_price(
-    make_settings: SettingsFactory,
-) -> None:
+async def test_demand_is_tuned_through_the_admin_parameter(make_settings: SettingsFactory) -> None:
     async with Harness(make_settings()) as h:
         clock = FakeClock()
-        mock_weather(clock)
-        admin_key = "0x" + Account.create().key.hex()
-        async with h.app.state.sessionmaker() as s:
-            await repo.ensure_default_market(s)
-            await repo.set_overrides(
-                s,
-                repo.GLOBAL_SCOPE,
-                {"base_demand_kw": "3"},
-                Account.from_key(admin_key).address.lower(),
-                datetime.now(UTC),
-            )
+        clock.t = local_noon_in_chennai()
+        mock_weather(clock, ghi=900, temp=30)
         await owner_with_meter(h, capacity_w=5000)
         svc = make_service(h, clock)
         await svc.poll_weather_once()
-        [t1] = await svc.tick_all()
-        await owner_with_meter(h, capacity_w=20_000)
-        clock.advance(15)
-        [t2] = await svc.tick_all()
-        base1, base2 = D(t1.drivers["demand"]["base_kw"]), D(t2.drivers["demand"]["base_kw"])
-        assert base1 > 0 and abs(base2 - base1) < D(
-            "0.01"
-        )  # unchanged by the new meter (clock drift only)
-        assert t2.raw_price < t1.raw_price  # same consumers, five times the generation
+        [before] = await svc.tick_all()
+        async with h.app.state.sessionmaker() as s:
+            await repo.set_overrides(
+                s,
+                repo.GLOBAL_SCOPE,
+                {"base_demand_kw": "2.25"},
+                "0x" + "ab" * 20,
+                datetime.now(UTC),
+            )
+        clock.advance(6)  # parameters are cached for a few seconds
+        [after] = await svc.tick_all()
+        assert abs(D(after.drivers["demand"]["demand_kw"]) - D("1.575")) < D("0.001")  # half
+        assert after.raw_price < before.raw_price * 7 // 10  # 0.5 ** 0.6 = 0.66
 
 
 @respx.mock

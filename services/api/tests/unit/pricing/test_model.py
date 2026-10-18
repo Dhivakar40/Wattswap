@@ -6,6 +6,8 @@ The derivations are in the comments so a reviewer can redo them with a calculato
 from decimal import Decimal
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from app.pricing.model import (
     cell_temperature,
@@ -114,12 +116,12 @@ def test_supply_sums_over_cells_with_their_own_weather() -> None:
 
 
 # ------------------------------------------------------------------------------- demand
-def test_demand_load_at_midnight() -> None:
-    # local hour 0 -> multiplier 0.55; 0.55 * 0.35 * 5 kW = 0.9625 kW
+def test_demand_is_base_demand_times_the_profile() -> None:
+    # local hour 0 -> multiplier 0.55; 4.5 kW x 0.55 = 2.475 kW
     d = demand_terms(inputs(cell()), P)
-    assert d.load_kw == D("0.9625")
+    assert d.load_kw == D("2.475")
     assert d.bids_kw == 0 and d.velocity_kw == 0
-    assert d.demand_kw == D("0.9625") and d.profile_multiplier == D("0.55")
+    assert d.demand_kw == D("2.475") and d.profile_multiplier == D("0.55")
 
 
 def test_demand_bids_and_velocity() -> None:
@@ -127,73 +129,74 @@ def test_demand_bids_and_velocity() -> None:
     d = demand_terms(inputs(cell(), bids_wh=6000, fills_wh=4000), P)
     assert d.bids_kw == D(6)
     assert d.velocity_kw == D(2)
-    assert d.demand_kw == D("0.9625") + 8
+    assert d.demand_kw == D("2.475") + 8
 
 
-def test_base_demand_does_not_scale_with_installed_capacity() -> None:
-    # 2 kW of consumer demand x the 0.55 midnight multiplier = 1.1 kW on top of 0.9625 kW
-    p = PricingParams(base_demand_kw=D(2))
-    d = demand_terms(inputs(cell()), p)
-    assert d.base_kw == D("1.1") and d.load_kw == D("0.9625") + D("1.1")
-    # doubling the installed base doubles the proportional part only
-    d2 = demand_terms(inputs(cell(10_000)), p)
-    assert d2.base_kw == D("1.1") and d2.load_kw == D("1.925") + D("1.1")
-    # with no meters at all the base demand is still there (at local solar time of lon 0)
-    assert demand_terms(inputs(), p).demand_kw == D("1.1")
+def test_demand_does_not_depend_on_installed_capacity() -> None:
+    small = demand_terms(inputs(cell(5_000)), P)
+    big = demand_terms(inputs(cell(50_000)), P)
+    assert small.demand_kw == big.demand_kw == D("2.475")
+    # it scales with base_demand_kw and the profile instead: 2 kW x 0.55 = 1.1 kW
+    assert demand_terms(inputs(cell()), PricingParams(base_demand_kw=D(2))).demand_kw == D("1.1")
+    # with no meters at all the demand is still there (profile at the local solar time of lon 0)
+    assert demand_terms(inputs(), PricingParams(base_demand_kw=D(2))).demand_kw == D("1.1")
+    assert demand_terms(
+        inputs(t=MIDNIGHT + 12 * 3600), PricingParams(base_demand_kw=D(2))
+    ).demand_kw == D("1.4")
 
 
-def test_without_base_demand_added_meters_leave_the_raw_price_unchanged() -> None:
-    """Documented property of the default model: demand and generation both scale with capacity."""
-
-    def raw(cap_w: int, p: PricingParams) -> int:
-        i = inputs(cell(cap_w, ghi="800", temp="30"))
-        return raw_price(supply_terms(i, p), demand_terms(i, p), p).price
-
-    assert raw(5_000, P) == raw(50_000, P)
-    with_base = PricingParams(base_demand_kw=D(2))
-    assert raw(50_000, with_base) < raw(5_000, with_base)  # more supply, same consumers: cheaper
+def test_zero_base_demand_leaves_only_the_order_book() -> None:
+    p = PricingParams(base_demand_kw=D(0))
+    assert demand_terms(inputs(cell()), p).demand_kw == 0
+    assert demand_terms(inputs(cell(), bids_wh=3000), p).demand_kw == D(3)
 
 
-def test_demand_uses_each_cells_local_time() -> None:
-    # Same UTC instant (00:00): a cell at 0 deg is at local midnight (0.55);
-    # a cell at 180 deg is at local noon (0.70). Equal capacities.
+def test_demand_profile_uses_the_capacity_weighted_local_time_of_the_cells() -> None:
+    # Same UTC instant (00:00): a cell at 0 deg is at local midnight (0.55); a cell at ~180 deg is
+    # at local noon (0.70). Equal capacities -> mean multiplier 0.625 -> 4.5 x 0.625 = 2.8125 kW.
     west = cell(4000, cell_id="w", lon_e6=0)
-    east = cell(4000, cell_id="e", lon_e6=180_000_000 - 1)  # ~ 12:00 local
+    east = cell(4000, cell_id="e", lon_e6=180_000_000 - 1)
     d = demand_terms(inputs(west, east), P)
-    assert d.load_kw > D("0.55") * D("0.35") * 8  # more than all-night demand
-    assert d.load_kw < D("0.70") * D("0.35") * 8 + D("0.001")
+    assert abs(d.load_kw - D("2.8125")) < D("0.0001")
+    # an installation 3x bigger in the west pulls the weighted time toward midnight
+    lopsided = demand_terms(inputs(cell(12_000, cell_id="w", lon_e6=0), east), P)
+    assert lopsided.load_kw < d.load_kw
 
 
 # --------------------------------------------------------------------------- raw price
 def test_raw_price_inventory_driven_night() -> None:
-    # night, 24 kWh held: S_eff = 1.0, D = 0.9625 -> ratio 0.9625
-    # P = 150000 * 0.9625 ** 0.6 = 146 599 (ln 0.9625 = -0.038221, * 0.6 = -0.022933, e^ = 0.977328)
+    # night, 24 kWh held: S_eff = 1.0, D = 2.475 -> ratio 2.475
+    # P = 150000 * 2.475 ** 0.6 = 258 367 (ln 2.475 = 0.906, * 0.6 = 0.5436, e^ = 1.7224)
     i = inputs(cell(ghi="0"), inventory_wh=24_000)
     r = raw_price(supply_terms(i, P), demand_terms(i, P), P)
-    assert r.ratio == D("0.9625") and not r.ratio_capped and not r.neutral
-    assert r.price == 146_599 and r.clamp is None
+    assert r.ratio == D("2.475") and not r.ratio_capped and not r.neutral
+    assert r.price == 258_367 and r.clamp is None
 
 
-def test_raw_price_night_without_inventory_is_sane_not_the_ceiling() -> None:
-    # S_eff = S_min = 0.5, D = 0.9625 -> ratio 1.925 -> 150000 * 1.925 ** 0.6 = 222 203
+def test_raw_price_night_without_inventory_is_scarce_but_below_the_ceiling() -> None:
+    # S_eff = S_min = 0.5, D = 2.475 -> ratio 4.95 -> 150000 * 4.95 ** 0.6 = 391 611
     i = inputs(cell(ghi="0"))
     r = raw_price(supply_terms(i, P), demand_terms(i, P), P)
-    assert r.price == 222_203
-    assert P.p_base < r.price < P.p_ceiling // 2  # elevated (scarcity), nowhere near the ceiling
+    assert r.price == 391_611 and not r.ratio_capped and r.clamp is None
+    assert P.p_base < r.price < P.p_ceiling  # scarcity pricing, not the ceiling
+    # stocking the market with WATT brings it down (inventory-driven)
+    stocked = inputs(cell(ghi="0"), inventory_wh=24_000)
+    assert raw_price(supply_terms(stocked, P), demand_terms(stocked, P), P).price < r.price
 
 
 def test_raw_price_noon() -> None:
     # GHI 900, 30 C: T_cell 57, derate 0.872, gen = 5 * 0.9 * 0.8 * 0.872 = 3.1392 kW;
-    # + 1.0 kW inventory = 4.1392; D = 0.70 * 0.35 * 5 = 1.225; ratio = 0.295955...
+    # + 1.0 kW inventory = 4.1392; D = 4.5 * 0.70 = 3.15; ratio = 0.76099...
+    # P = 150000 * 0.76099 ** 0.6 = 127 329 (float cross-check: 127329.12)
     i = inputs(cell(ghi="900", temp="30"), t=MIDNIGHT + 12 * 3600, inventory_wh=24_000)
     s, d = supply_terms(i, P), demand_terms(i, P)
     assert s.generation_kw == D("3.1392") and s.effective_kw == D("4.1392")
-    assert d.demand_kw == D("1.225")
-    assert raw_price(s, d, P).price == 72_248  # float cross-check: 72247.54
+    assert d.demand_kw == D("3.15")
+    assert raw_price(s, d, P).price == 127_329
 
 
 def test_raw_price_ratio_cap() -> None:
-    # 100 kWh of open bids in an hour: D ~ 101 kW against S_eff 0.5 -> ratio capped at 10
+    # 100 kWh of open bids in an hour: D ~ 107 kW against S_eff 0.5 -> ratio capped at 10
     # P = 150000 * 10 ** 0.6 = 597 161
     i = inputs(cell(ghi="0"), bids_wh=100_000)
     r = raw_price(supply_terms(i, P), demand_terms(i, P), P)
@@ -207,26 +210,83 @@ def test_raw_price_ceiling_and_floor_clamps() -> None:
     r = raw_price(supply_terms(i, low_ceiling), demand_terms(i, low_ceiling), low_ceiling)
     assert r.price == 500_000 and r.clamp == "ceiling" and r.unclamped > 500_000
 
-    # lots of supply: 1000 kWh of inventory -> 83.3 kW * 0.5 = 41.7 kW against ~1 kW of demand
-    flooded = inputs(cell(ghi="0"), inventory_wh=1_000_000)
+    # lots of supply: 2000 kWh of inventory -> 166.7 kW * 0.5 = 83.3 kW against 2.475 kW of demand
+    # ratio 0.0297 -> 150000 * 0.0297 ** 0.6 = 18 186, below the 20 000 floor
+    flooded = inputs(cell(ghi="0"), inventory_wh=2_000_000)
     r2 = raw_price(supply_terms(flooded, P), demand_terms(flooded, P), P)
-    assert r2.price == P.p_floor and r2.clamp == "floor"
+    assert r2.price == P.p_floor and r2.clamp == "floor" and 18_000 < r2.unclamped < 18_400
 
 
-def test_raw_price_neutral_when_the_market_is_empty() -> None:
-    i = inputs()  # no meters, no inventory, no bids
+def test_raw_price_neutral_only_when_nobody_is_in_the_market() -> None:
+    i = inputs()  # no meters, no inventory, no bids, no fills
     r = raw_price(supply_terms(i, P), demand_terms(i, P), P)
     assert r.neutral and r.price == P.p_base
+    # the moment there is any order-book activity it is a real market again
+    busy = inputs(bids_wh=1000)
+    assert not raw_price(supply_terms(busy, P), demand_terms(busy, P), P).neutral
 
 
 def test_elasticity_closed_forms() -> None:
     # epsilon = 1: P = base * ratio. epsilon = 0.5: P = base * sqrt(ratio).
-    i = inputs(cell(ghi="0"), inventory_wh=24_000)  # ratio 0.9625
+    i = inputs(cell(ghi="0"), inventory_wh=24_000)  # ratio 2.475
     s, d = supply_terms(i, P), demand_terms(i, P)
     linear = PricingParams(epsilon=D(1))
-    assert raw_price(s, d, linear).price == 144_375  # 150000 * 0.9625
+    assert raw_price(s, d, linear).price == 371_250  # 150000 * 2.475
     root = PricingParams(epsilon=D("0.5"))
-    assert raw_price(s, d, root).price == 147_161  # 150000 * sqrt(0.9625) = 147 160.6
+    assert raw_price(s, d, root).price == 235_982  # 150000 * sqrt(2.475) = 235 981.99
+
+
+# ------------------------------------------------- the market reacts to supply
+NOON = MIDNIGHT + 12 * 3600
+
+
+def noon_raw(capacity_w: int, p: PricingParams = P, inventory_wh: int = 0) -> int:
+    """Raw price at local solar noon on a clear day (GHI 900, 30 C), for one cell of this size."""
+    i = inputs(cell(capacity_w, ghi="900", temp="30"), t=NOON, inventory_wh=inventory_wh)
+    return raw_price(supply_terms(i, p), demand_terms(i, p), p).price
+
+
+def test_adding_capacity_lowers_the_noon_raw_price_and_removing_it_raises_it() -> None:
+    fleet = [5_000, 10_000, 15_000, 20_000, 40_000]
+    prices = [noon_raw(c) for c in fleet]
+    # hand-computed: S = cap_kW * 0.9 * 0.8 * 0.872 = 0.62784 * cap_kW against D = 3.15 kW
+    assert prices == [150_309, 99_167, 77_752, 65_426, 43_165]
+    assert prices == sorted(prices, reverse=True)  # strictly cheaper with every added meter
+    # ... and back up again as capacity is removed
+    for bigger, smaller in zip(fleet[1:], fleet, strict=False):
+        assert noon_raw(smaller) > noon_raw(bigger)
+    assert noon_raw(5_000) == prices[0]  # removing the meters restores the original price exactly
+
+
+def test_demand_is_unchanged_when_capacity_changes() -> None:
+    a = demand_terms(inputs(cell(5_000, ghi="900"), t=NOON), P)
+    b = demand_terms(inputs(cell(40_000, ghi="900"), t=NOON), P)
+    assert a.demand_kw == b.demand_kw == D("3.15")  # same demand; only supply moved
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    capacity=st.integers(1_000, 200_000),
+    extra=st.integers(1_000, 200_000),
+    inventory=st.integers(0, 200_000),
+)
+def test_more_capacity_never_raises_the_noon_price(
+    capacity: int, extra: int, inventory: int
+) -> None:
+    assert noon_raw(capacity + extra, inventory_wh=inventory) <= noon_raw(
+        capacity, inventory_wh=inventory
+    )
+
+
+def test_calibration_the_demo_fleet_prices_close_to_p_base_at_noon() -> None:
+    """base_demand_kw = 4.5 is calibrated on the demo fleet: one 5 kW meter, clear noon, no WATT held."""
+    price = noon_raw(5_000)
+    assert price == 150_309  # 0.21 % above P_base
+    assert abs(price - P.p_base) * 200 < P.p_base  # within 0.5 %
+    # the exact calibrating value would be 3.1392 kW / 0.70 = 4.48457 kW
+    assert abs(D("3.1392") / D("0.70") - P.base_demand_kw) < D("0.02")
+    exact = PricingParams(base_demand_kw=D("3.1392") / D("0.70"))
+    assert abs(noon_raw(5_000, exact) - P.p_base) <= 1
 
 
 @pytest.mark.parametrize("ratio_inputs", [(0, 0), (100, 0), (0, 5000)])

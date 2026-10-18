@@ -50,7 +50,7 @@ All power quantities are in **kW** (average over the pricing horizon); `Decimal`
 1. **Cell temperature / derate**: `T_cell = T_air + 0.03 × G`; `derate = 1 − 0.004 × max(0, T_cell − 25)`; `irr = G / 1000` (G = `shortwave_radiation`, W/m²).
 2. **Supply forecast** `S = Σ_meters  capacity_kW × irr × PR × derate`, each meter using its cell's weather; meters = confirmed + active rows in the DB, re-read every tick, so adding a meter changes the next tick's supply.
 3. **Demand** `D = D_load + D_bids + D_velocity`:
-   `D_load = load_profile(local_solar_hour) × demand_scale × installed_capacity_kW` (configurable 24-point curve; local solar hour from the cell longitude, no tz database);
+   `D_load = base_demand_kw × load_profile(local_solar_hour)` (revised in review: no longer proportional to installed capacity) (configurable 24-point curve; local solar hour from the cell longitude, no tz database);
    `D_bids = open_bid_Wh / 1000 / H` (H = horizon hours, default 1);
    `D_velocity = velocity_weight × recent_fill_Wh / 1000 / window_hours`.
 4. **Raw price** `P_raw = P_base × (D / S_eff)^ε`, with `S_eff = max(S, s_floor_frac × installed_capacity_kW)` and the ratio capped at `ratio_cap` so night-time (S = 0) is finite; then clamped to `[P_floor, P_ceiling]`. With no meters (S = D = 0) the price is `P_base`.
@@ -175,7 +175,8 @@ New dependencies: `respx` and `hypothesis` (dev). No new runtime dependency (htt
 2. **Limiter and breaker are consistent, and the breaker watches the RAW price.** Max step 0.25 %/tick; the limiter alone moves the applied price at most 10.50 % up / 9.53 % down per 10-minute window, below the 15 % trigger, and `cross_check()` enforces that for every parameter set (and refuses to boot at an inconsistent tick rate). Stale weather (30 min) freezes; a raw move > 15 % in 10 min only widens the `band_bps` hint (capped at the on-chain band) and logs an anomaly event. The state machine and transition table are in `docs/pricing-model.md`.
 3. **Full-day trace** (midnight, sunrise, noon, sudden cloud, anomaly clearing, sunset, plus a weather-outage variant) with raw price, EMA, applied price, limiter and breaker at each point, in the doc and in tests; a test fails if the doc table differs from the engine.
 4. **Price drivers on every tick**: supply term, demand term, weather inputs per cell, clamps, breaker state, band, and a demand/supply/generation/inventory attribution of the change, stored in `price_ticks.drivers` (JSONB) and sent on the Redis feed and `/price`.
-5. **Standalone entry point**: `python -m app.pricing.run` (`make pricing`, compose profile `pricing`), same code and leader lock as the embedded engine.
+5. **Demand no longer scales with installed capacity** (owner change after review): `D = base_demand_kw × load profile + bids + fill velocity`, `base_demand_kw = 4.5` calibrated so the demo fleet at a clear noon prices at 150 309 (+0.2 % over `P_base`). Adding meters now lowers the noon raw price and removing them raises it, proven in the pure model, by a property test and against real meters in the database. Day trace, docs and ADR-007 regenerated.
+6. **Standalone entry point**: `python -m app.pricing.run` (`make pricing`, compose profile `pricing`), same code and leader lock as the embedded engine.
 
 Previously approved deviations, as built: the exchange (not the oracle) verifies quotes; the single-price `PriceOracle` follows the primary market only (ADR-007); extra `PriceQuote` vectors instead of a duplicate; `band_bps` is a capped hint; two clocks for the demo.
 
@@ -202,7 +203,7 @@ make up && make deploy-local && make sim-provision   # then: curl localhost:8000
 
 ## Findings during the build (all fixed or documented)
 
-- **Demand and generation both scale with installed capacity**, so with no inventory, registering meters raises supply but not the raw price. Kept as the approved model, documented, and added an optional `base_demand_kw` (default 0) so consumer demand that does not scale with PV can be modelled; tests cover both.
+- **Demand and generation both scaled with installed capacity** in the first version, so adding meters left the raw price unchanged. Fixed in review: demand is now independent of the installed base (see *Owner changes*). Consequence to be aware of: with a small fleet the model is demand-heavy, so evening prices are high (about 0.40 mUSDC/kWh with 24 kWh stored, near the 0.60 ceiling with none).
 - **A start-up race** (the weather poller and the ticker both created the default market) would have crashed an iteration on a fresh database; `ensure_default_market` is now an idempotent upsert with a 12-way concurrency test.
 - **A 1 s tick would have broken the limiter/breaker rule**, found when running the engine as a separate process; the service now refuses to boot at such a tick rate.
 - **Western longitudes produced a negative local hour** (Decimal `%` keeps the dividend's sign); caught by a hand-computed test and fixed.
@@ -210,7 +211,7 @@ make up && make deploy-local && make sim-provision   # then: curl localhost:8000
 
 ## Known limitations / tech debt
 
-- Demand is a model; bids and fills are 0 until Phase 4. Before the order book exists, "tradeable inventory" is the WATT *held* by active meters' owners, including WATT they may not intend to sell.
+- Demand is a model (`base_demand_kw` × profile) calibrated on the demo fleet; bids and fills are 0 until Phase 4. A very different fleet size needs `base_demand_kw` re-anchored through the admin API. Before the order book exists, "tradeable inventory" is the WATT *held* by active meters' owners, including WATT they may not intend to sell.
 - `PriceOracle` holds one price; only the primary market is pushed on-chain.
 - The engine cannot change the on-chain band, only publish a capped hint.
 - The backtest's inventory is a simple ledger (no order book in a replay) and runs at about 1 000 ticks/second.

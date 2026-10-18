@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from app.pricing.params import SPECS, PricingParams
-from app.pricing.trace import format_table, run_day, trace_rows
+from app.pricing.trace import fleet_rows, format_table, run_day, trace_rows
 
 DOC = Path(__file__).resolve().parents[5] / "docs" / "pricing-model.md"
 
@@ -21,3 +21,10 @@ def test_every_parameter_is_documented() -> None:
     text = DOC.read_text(encoding="utf-8")
     missing = [k for k in SPECS if f"`{k}`" not in text]
     assert not missing, f"undocumented parameters: {missing}"
+
+
+def test_the_calibration_table_in_the_docs_is_exactly_what_the_engine_produces() -> None:
+    table = format_table(fleet_rows(PricingParams()))
+    assert table in DOC.read_text(encoding="utf-8"), (
+        "the fleet calibration table is out of date; regenerate with `uv run python -m app.pricing.trace`"
+    )

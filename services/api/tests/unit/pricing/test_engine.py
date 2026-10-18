@@ -13,7 +13,7 @@ from tests.unit.pricing.helpers import MIDNIGHT, cell, inputs
 
 D = Decimal
 P = PricingParams()
-NIGHT = {"inventory_wh": 24_000}  # raw 146 599 at local midnight (see test_model)
+NIGHT = {"inventory_wh": 24_000}  # raw 258 367 at local midnight (see test_model)
 
 
 def run(
@@ -35,24 +35,24 @@ def run(
 # ---------------------------------------------------------------------- smoothing chain
 def test_first_tick_has_no_history_so_price_equals_raw() -> None:
     _, [t] = run(1, lambda n: inputs(cell(ghi="0"), **NIGHT))
-    assert t.raw_price == 146_599 and t.price == 146_599
-    assert t.ema_price == 146_599 and t.drivers["smoothing"]["previous"] is None
+    assert t.raw_price == 258_367 and t.price == 258_367
+    assert t.ema_price == 258_367 and t.drivers["smoothing"]["previous"] is None
     assert t.breaker.mode == Mode.NORMAL and t.band_bps == 150  # un-widened hint
 
 
 def test_ema_then_limiter_hand_computed_sequence() -> None:
     # tick 0: night, raw 146 599 -> price 146 599.
     # tick 1: demand spikes (20 kWh of bids): raw = 150000 * ratio**0.6 with the ratio capped
-    #         at 10 -> 597 161. EMA = 0.2 * 597161 + 0.8 * 146599 = 236 711.4 (target 236 711).
-    #         The limiter allows 146599 * 25 // 10000 = 366 -> price 146 965, direction "up".
+    #         at 10 -> 597 161. EMA = 0.2 * 597161 + 0.8 * 258367 = 326 125.8 (target 326 126).
+    #         The limiter allows 258367 * 25 // 10000 = 645 -> price 259 012, direction "up".
     def make(n: int) -> Any:
         return inputs(cell(ghi="0"), **NIGHT, bids_wh=0 if n == 0 else 100_000)
 
     _, [t0, t1] = run(2, make)
-    assert (t0.price, t1.raw_price) == (146_599, 597_161)
-    assert t1.drivers["smoothing"]["ema"] == "236711.400"
-    assert t1.drivers["smoothing"]["target"] == 236_711
-    assert t1.price == 146_599 + 366 == 146_965
+    assert (t0.price, t1.raw_price) == (258_367, 597_161)
+    assert t1.drivers["smoothing"]["ema"] == "326125.800"
+    assert t1.drivers["smoothing"]["target"] == 326_126
+    assert t1.price == 258_367 + 645 == 259_012
     assert t1.drivers["smoothing"]["limiter"]["direction"] == "up"
     assert "limiter_up" in t1.drivers["clamps"] and "ratio_cap" in t1.drivers["clamps"]
 
@@ -202,14 +202,14 @@ def test_drivers_are_json_safe_and_contain_no_floats() -> None:
 
 
 def test_attribution_splits_a_demand_driven_move() -> None:
-    # Only demand changes between the ticks: 0.9625 kW -> 0.9625 + 1 kW of bids.
+    # Only demand changes between the ticks: 2.475 kW -> 2.475 + 1 kW of bids.
     def make(n: int) -> Any:
         return inputs(cell(ghi="0"), **NIGHT, bids_wh=0 if n == 0 else 1000)
 
     _, [_, t1] = run(2, make)
     a = t1.drivers["attribution"]
-    # eps * ln(1.9625 / 0.9625) * 10000 = 0.6 * 0.712440 * 10000 = 4274.6 bps; supply unchanged
-    assert float(a["from_demand_bps"]) == pytest.approx(4274.6, abs=0.1)
+    # eps * ln(3.475 / 2.475) * 10000 = 0.6 * 0.339354 * 10000 = 2036.1 bps; supply unchanged
+    assert float(a["from_demand_bps"]) == pytest.approx(2036.1, abs=0.1)
     assert float(a["from_supply_bps"]) == 0 and float(a["of_which_generation_bps"]) == 0
     assert a["approximate"] is False
 
@@ -282,5 +282,5 @@ def test_volatility_is_published_once_there_is_history() -> None:
 
 def test_supply_and_demand_are_stored_as_integer_watts() -> None:
     _, [t] = run(1, lambda n: inputs(cell(ghi="800"), **NIGHT))
-    # 3.8288 kW -> 3829 W; 0.9625 kW = 962.5 W -> 962 (round half to even, deterministic)
-    assert t.supply_w == 3829 and t.demand_w == 962
+    # 3.8288 kW -> 3829 W (rounded half to even); 4.5 kW x 0.55 = 2.475 kW -> 2475 W
+    assert t.supply_w == 3829 and t.demand_w == 2475

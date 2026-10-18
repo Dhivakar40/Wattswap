@@ -56,9 +56,15 @@ send on-chain, honest about the data it trusts, and usable in an accelerated dem
     number of instances is safe; `PRICING_EMBEDDED=false` plus `python -m app.pricing.run` (or the compose
     `pricing` profile) moves it to its own process. State is restored from the persisted ticks after a restart.
 
-11. **Demand is proportional to the installed base by default.** This keeps the model self-consistent with no consumer
-    registry, with a consequence that is documented rather than hidden: with no inventory, adding meters raises supply
-    but not the raw price. `base_demand_kw` adds demand that does not scale with PV when that is wanted.
+11. **Demand is independent of the installed base.** `D = base_demand_kw × load_profile(local solar hour) + bids +
+    fill velocity`. An earlier draft scaled the load with installed capacity (consumers modelled as the prosumers
+    themselves); because generation also scales with capacity, that made the raw price insensitive to adding or
+    removing meters, so it was replaced. Now more meters mean more supply against the same demand, hence a lower price,
+    and fewer meters a higher one (tested in the pure model, as a property, and against real meters in the database).
+    `base_demand_kw` is **4.5 kW**, calibrated so that the demo fleet (one 5 kW meter) at a clear noon (GHI 900 W/m²,
+    30 °C, no stored WATT) prices at 150 309, 0.2 % above `P_base`; the derivation and a fleet-size table are in
+    `docs/pricing-model.md`. The consequence is a demand-heavy market with a small fleet: evenings are scarce
+    (about 2.7× `P_base` with 24 kWh stored, near the ceiling with none), which is the intended signal.
 
 ## Consequences
 

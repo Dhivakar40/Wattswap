@@ -168,9 +168,9 @@ def test_backtest_first_row_matches_a_hand_calculation(
     _, _, out = run_cli(tmp_path, "--inventory", "fixed:24000")
     first = next(csv.DictReader(out.open(encoding="utf-8")))
     # cell (0, 0) has its centre at 0.25 deg E: local hour 0.25 / 15 = 1/60 h, multiplier
-    # 0.55 + (0.52 - 0.55) / 60 = 0.5495, load = 0.5495 * 0.35 * 5 = 0.961625 kW; S_eff = 1.0 kW
-    assert first["demand_kw"] == "0.961625" and first["supply_kw"] == "1.000000"
-    assert int(first["raw_price"]) == round(150_000 * 0.961625**0.6)  # 146 411
+    # 0.55 + (0.52 - 0.55) / 60 = 0.5495, load = 4.5 * 0.5495 = 2.47275 kW; S_eff = 1.0 kW
+    assert first["demand_kw"] == "2.472750" and first["supply_kw"] == "1.000000"
+    assert int(first["raw_price"]) == round(150_000 * 2.47275**0.6)
 
 
 def test_backtest_is_deterministic(tmp_path: Path) -> None:
@@ -224,7 +224,9 @@ def test_backtest_inventory_none_prices_the_night_higher_than_a_stocked_night(
     _, _, stocked = run_cli(tmp_path, "--inventory", "fixed:24000")
     first_stocked = next(csv.DictReader(stocked.open(encoding="utf-8")))
     assert int(first_none["raw_price"]) > int(first_stocked["raw_price"])
-    assert int(first_none["raw_price"]) < 600_000 // 2  # scarce, but nowhere near the ceiling
+    assert (
+        int(first_none["raw_price"]) < 600_000
+    )  # scarce (about 0.39 mUSDC/kWh), but not the ceiling
 
 
 @pytest.mark.parametrize(

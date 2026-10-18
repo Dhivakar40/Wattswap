@@ -153,7 +153,49 @@ def format_table(rows: list[dict[str, str]]) -> str:
     return "\n".join([line, sep, *body])
 
 
+FLEET_SIZES_KW: tuple[int, ...] = (5, 10, 15, 20, 40)
+
+
+def fleet_rows(params: PricingParams | None = None) -> list[dict[str, str]]:
+    """Raw price at local solar noon on a clear day for fleets of different size.
+
+    GHI 900 W/m2, 30 C, nobody holding any WATT, one cell at longitude 0: the calibration table.
+    """
+    from app.pricing.model import demand_terms, raw_price, supply_terms
+
+    p = params or PricingParams()
+    rows = []
+    for kw in FLEET_SIZES_KW:
+        cell = CellInput(
+            cell_id="fleet",
+            capacity_w=kw * 1000,
+            meters=kw // 5,
+            center_lon_e6=0,
+            ghi_wm2=D(900),
+            temp_c=D(30),
+            weather_age_s=0,
+            weather_source="live",
+        )
+        i = MarketInputs(market_time=DAY_START + 12 * 3600, cells=(cell,))
+        s, d = supply_terms(i, p), demand_terms(i, p)
+        r = raw_price(s, d, p)
+        rows.append(
+            {
+                "fleet": f"{kw // 5} x 5 kW",
+                "installed_kw": str(kw),
+                "S_eff_kw": f"{s.effective_kw:.4f}",
+                "D_kw": f"{d.demand_kw:.4f}",
+                "D/S": f"{r.ratio:.4f}",
+                "raw price": str(r.price),
+                "vs P_base": f"{(D(r.price) - D(p.p_base)) * 100 / D(p.p_base):+.1f}%",
+            }
+        )
+    return rows
+
+
 if __name__ == "__main__":  # pragma: no cover
     p = PricingParams()
     print("Synthetic day, cloud event 12:30-13:15\n")
     print(format_table(trace_rows(run_day(p), p)))
+    print("\nNoon raw price by fleet size (clear, GHI 900, 30 C, no inventory)\n")
+    print(format_table(fleet_rows(p)))

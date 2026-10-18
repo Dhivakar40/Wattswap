@@ -55,11 +55,11 @@ class PricingParams:
     ratio_cap: Decimal = D("10")  # D / S_eff is capped here
 
     # --- demand -----------------------------------------------------------------------
-    demand_scale: Decimal = D("0.35")  # load = profile * scale * installed capacity
-    # Demand that does NOT scale with installed PV: consumers who are not prosumers. With the
-    # default 0, demand grows in proportion to the installed base, so adding meters raises
-    # supply without moving the raw price; set this above 0 to make added supply cheaper.
-    base_demand_kw: Decimal = D("0")
+    # Average consumer demand of the market, in kW, before the time-of-day profile. It does NOT
+    # depend on installed PV, so adding meters adds supply against the same demand and lowers the
+    # price. 4.5 kW is calibrated so that the demo fleet (one 5 kW meter, clear noon, GHI 900 W/m2,
+    # 30 C, no stored WATT) prices at about P_base: see docs/pricing-model.md.
+    base_demand_kw: Decimal = D("4.5")
     load_profile: tuple[Decimal, ...] = DEFAULT_LOAD_PROFILE
     bid_horizon_hours: Decimal = D("1")  # open bid kWh -> kW
     velocity_weight: Decimal = D("0.5")
@@ -145,11 +145,12 @@ SPECS: dict[str, ParamSpec] = {
         "decimal", "Floor on effective supply as a fraction of installed capacity", D(0), D(1)
     ),
     "ratio_cap": ParamSpec("decimal", "Cap on demand/supply", D(1), D(1000)),
-    "demand_scale": ParamSpec(
-        "decimal", "Baseline load as a fraction of installed capacity", D("0.01"), D(10)
-    ),
     "base_demand_kw": ParamSpec(
-        "decimal", "Market demand independent of installed PV capacity", D(0), D(10**6), "kW"
+        "decimal",
+        "Average market demand before the load profile (independent of installed PV)",
+        D(0),
+        D(10**6),
+        "kW",
     ),
     "load_profile": ParamSpec(
         "profile", "24 hourly demand multipliers by local solar hour", D(0), D(10)
