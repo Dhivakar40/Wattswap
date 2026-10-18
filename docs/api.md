@@ -104,3 +104,35 @@ Zero-energy intervals (night) are not sent: nothing to tokenize, and the contrac
 
 `GET /config`: chain id, `EnergyToken` and `MeterRegistry` addresses, default `reading_interval_seconds`, the
 registry's interval bounds and `safety_bps`, `simulated_meters: true`, and a note stating this is a testnet demo.
+
+# Pricing (Phase 3)
+
+Model, formulas and parameters: [pricing-model.md](pricing-model.md). Prices are integers in **mUSDC base units
+(6 decimals) per kWh**; energy is in **Wh**.
+
+## Public
+
+| Endpoint | Notes |
+|---|---|
+| `GET /markets` | Markets with their region, `is_primary`, and `onchain_enabled` (`WattSwapExchange.marketEnabled`). |
+| `GET /markets/{id}/price` | Latest tick: `price`, `rawPrice`, `breaker`, `bandBps`, supply/demand in watts, `marketTime`, `clockMode`, `accelerated`, the **signed quote** `{marketId, price, timestamp, signature, signer}` and the full `drivers` breakdown. `seq` is the Redis sequence number. 404 `no_price_yet` before the first tick. |
+| `GET /markets/{id}/ticks?limit&before&drivers` | History, newest first; page with `next_before`; `drivers=true` includes the breakdown. |
+| `GET /markets/{id}/forecast` | Next 24 hours of hourly generation, supply, demand and implied **raw** price (before smoothing). |
+
+## Admin (role-gated; `ADMIN_ADDRESSES`)
+
+| Endpoint | Notes |
+|---|---|
+| `GET /admin/pricing/config?market_id=` | Every parameter with kind, unit, default, effective value, `source` (default / global / market), bounds, `editable`, last change. |
+| `PUT /admin/pricing/config` | `{market_id?, values: {...}, reset: [...]}`. Validated atomically (types, ranges, cross-parameter rules including the limiter/breaker rule); decimals as strings, no JSON floats; audited. Effective within seconds. |
+| `GET /admin/pricing/state?market_id=` | Breaker (mode, reason, since), per-cell weather age and source, last weather error, last oracle push. Written by the engine, so it works when the engine is a separate process. |
+| `POST /admin/pricing/breaker/reset` | Queues a manual reset (202); applied on the next tick. |
+| `GET /admin/pricing/events?market_id=` | Breaker transitions and anomaly events, newest first. |
+| `POST /admin/markets`, `PATCH /admin/markets/{id}` | Define a market (id = `keccak256(name)`), its bounding box, `enabled`, `is_primary` (only one). The exchange admin must still `setMarket` on-chain. |
+
+## Redis feed
+
+Channel `price:{marketId}` carries `{"type":"price","channel":"price:{marketId}","seq":N,"ts":T,"data":{...}}`
+(`data` = the object returned by `/price`). `seq` increments per tick; a gap means re-snapshot via REST.
+Snapshots: `price:{marketId}:latest`, `quote:{marketId}:latest`, `pricing:state:{marketId}`,
+`pricing:forecast:{marketId}`.

@@ -59,6 +59,11 @@ services:
       ADMIN_ADDRESSES: ${ADMIN_ADDRESSES:-}
       READING_INTERVAL_SECONDS: ${READING_INTERVAL_SECONDS:-900}
       MINT_CONFIRMATIONS: ${MINT_CONFIRMATIONS:-1}
+      PRICING_ENABLED: ${PRICING_ENABLED:-true}
+      PRICING_EMBEDDED: ${PRICING_EMBEDDED:-true}
+      PRICING_TICK_SECONDS: ${PRICING_TICK_SECONDS:-15}
+      WEATHER_POLL_SECONDS: ${WEATHER_POLL_SECONDS:-600}
+      PRICING_CLOCK_MODE: ${PRICING_CLOCK_MODE:-real}
       # Role keys. Each must be a DIFFERENT address or the API refuses to start.
       ORACLE_PRIVATE_KEY: ${ORACLE_PRIVATE_KEY:?set ORACLE_PRIVATE_KEY in .env}
       REGISTRAR_PRIVATE_KEY: ${REGISTRAR_PRIVATE_KEY:?set REGISTRAR_PRIVATE_KEY in .env}
@@ -78,6 +83,28 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # The pricing engine as its own process. Opt-in: set PRICING_EMBEDDED=false in .env so the API does
+  # not also run one, then `docker compose --profile pricing up -d pricing`. A leader lock makes it safe
+  # to run several.
+  pricing:
+    profiles: ["pricing"]
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.pricing.run"]
+    environment:
+      API_ENV: ${API_ENV:-development}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wattswap}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wattswap}
+      REDIS_URL: redis://redis:6379/0
+      RPC_URL: http://anvil:8545
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      PRICER_PRIVATE_KEY: ${PRICER_PRIVATE_KEY:?set PRICER_PRIVATE_KEY in .env}
+      PRICING_TICK_SECONDS: ${PRICING_TICK_SECONDS:-15}
+      WEATHER_POLL_SECONDS: ${WEATHER_POLL_SECONDS:-600}
+      PRICING_CLOCK_MODE: ${PRICING_CLOCK_MODE:-real}
+    depends_on:
+      api: { condition: service_healthy }
 
   # SIMULATED smart meter (not real hardware). Opt-in: needs a provisioned meter first
   # (`make sim-provision`), then `docker compose --profile sim up meter-sim`.

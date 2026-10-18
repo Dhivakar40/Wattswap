@@ -9,7 +9,7 @@ Core ideas: signed meter readings mint an energy token (WATT, 3 decimals, 1.000 
 engine re-prices the market from live weather and order-book pressure; trades settle atomically in one
 contract call; prices, order book and trades stream to the browser over WebSockets.
 
-**Status:** Phase 2 (backend core and the meter-to-mint pipeline). Pricing, trading and the full UI arrive in Phases 3-8
+**Status:** Phase 3 (pricing engine, on top of the Phase 2 meter-to-mint pipeline). Trading and the full UI arrive in Phases 4-8
 (see [CLAUDE.md](CLAUDE.md) for the roadmap and [docs/architecture.md](docs/architecture.md) for the diagram).
 
 ## Architecture
@@ -58,6 +58,8 @@ Then open:
 | `make migrate` | Apply database migrations |
 | `make sim` | **Simulated** meter in accelerated demo mode: register a demo meter, then 1 interval / 20 s |
 | `make sim-provision` | DEV ONLY: register the demo meter through the API (signs in as Anvil account #5) |
+| `make pricing` | Run the pricing engine as its own process (set `PRICING_EMBEDDED=false` on the API) |
+| `make backtest ARGS="..."` | Replay the engine over historical Open-Meteo data (price series + volatility stats) |
 | `make test-integration` | The end-to-end gate: simulated meter, signed readings, WATT minted on Anvil |
 | `make gen-vectors` | Regenerate shared EIP-712 test vectors (`packages/shared/vectors/eip712.json`) |
 | `make test-<area>` / `make lint-<area>` | One of `contracts`, `api`, `meter-sim`, `shared`, `web` |
@@ -95,6 +97,25 @@ readings are always for completed intervals.
 `make sim` provisions a demo meter once (kept in `services/meter-sim/runtime/`, git-ignored). After resetting the chain or database (`docker compose down -v`), delete that folder to provision a fresh one.
 
 The role keys (oracle, registrar, relayer, pricer) must be different addresses; the API will not start otherwise.
+
+## Pricing engine
+
+`services/api/app/pricing` re-prices every market every 15 s from live weather (Open-Meteo), the registered meters'
+capacity, the WATT that is tradeable, the time of day and the order book. The model is a pure, deterministic core with
+EMA smoothing, a 0.25 %/tick rate limiter and a circuit breaker; every tick stores a breakdown of *why* the price
+moved. Each tick is signed as an EIP-712 `PriceQuote`, published to Redis (`price:{marketId}`), persisted to
+`price_ticks`, and pushed to `PriceOracle` on a threshold or heartbeat. Prices are **integers in mUSDC base units
+(6 decimals) per kWh**; no float ever reaches a signature or a transaction.
+
+* Formulas, parameters, the breaker state machine and a worked full-day trace: [docs/pricing-model.md](docs/pricing-model.md);
+  decisions: [ADR-007](docs/adr/007-pricing-engine.md); endpoints: [docs/api.md](docs/api.md).
+* Watch it live: `make up && make deploy-local`, register a meter (`make sim-provision`), then
+  `curl localhost:8000/api/v1/markets` and `curl localhost:8000/api/v1/markets/<marketId>/price`.
+* Demo: set `PRICING_CLOCK_MODE=follow_readings`, then `make sim`. The engine follows the accelerated simulator's clock,
+  so weather and the load profile sweep a simulated day and the price moves (quote timestamps stay on real chain time).
+* Backtest: `make backtest ARGS="--lat 13.0827 --lon 80.2707 --from 2026-06-01 --to 2026-06-07 --capacity-kw 5 --out series.csv"`.
+* Admin (role-gated): edit parameters (validated, audited), watch the breaker, reset it, define regional markets.
+* Standalone: `make pricing` or `docker compose --profile pricing up -d pricing`; a Redis leader lock makes several safe.
 
 ## Environment variables
 
