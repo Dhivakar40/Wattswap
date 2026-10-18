@@ -20,7 +20,8 @@ from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging, request_id_ctx
 from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
 from app.core.state import ChainServices
-from app.routers import auth, meters, readings, system
+from app.pricing.factory import PricingBundle, build_pricing
+from app.routers import admin_pricing, auth, markets, meters, readings, system
 from app.workers.mint_worker import MintWorker
 
 log = logging.getLogger("wattswap.api")
@@ -85,13 +86,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.mint_worker = worker
             elif settings.mint_worker_enabled:
                 log.warning("mint worker not started (missing oracle key or chain problems)")
+        pricing: PricingBundle | None = None
+        pricing_task: asyncio.Task[None] | None = None
+        if settings.pricing_enabled and settings.pricing_embedded:
+            pricing = build_pricing(
+                settings, app.state.sessionmaker, redis, None if chain is None else chain.client
+            )
+            app.state.pricing = pricing.service
+            pricing_task = asyncio.create_task(pricing.service.run(stop), name="pricing")
         try:
             yield
         finally:
             stop.set()
-            if worker_task is not None:
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await asyncio.wait_for(worker_task, timeout=10)
+            for task in (worker_task, pricing_task):
+                if task is not None:
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await asyncio.wait_for(task, timeout=10)
+            if pricing is not None:
+                await pricing.aclose()
             if chain is not None:
                 await chain.client.close()
             await redis.aclose()
@@ -134,6 +146,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(auth.router)
     api_v1.include_router(meters.router)
     api_v1.include_router(readings.router)
+    api_v1.include_router(markets.router)
+    api_v1.include_router(admin_pricing.router)
     api_v1.include_router(system.config_router)
     app.include_router(system.system_router)
     app.include_router(api_v1)

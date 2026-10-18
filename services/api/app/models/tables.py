@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -12,12 +13,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
 )
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import (
@@ -190,20 +192,97 @@ class Trade(Base):
 
 
 class PriceTick(Base):
-    """Schema only (Phase 3)."""
+    """One pricing-engine tick, with the full price-drivers breakdown for the Insights page."""
 
     __tablename__ = "price_ticks"
-    __table_args__ = (Index("ix_price_ticks_market_ts", "market_id", "ts"),)
+    __table_args__ = (
+        Index("ix_price_ticks_market_ts", "market_id", "ts"),
+        UniqueConstraint("market_id", "ts", name="uq_price_ticks_market_ts"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )  # chain/wall clock
+    market_id: Mapped[str] = mapped_column(Bytes32, nullable=False)
+    raw_price: Mapped[Decimal] = mapped_column(Uint256, nullable=False)  # mUSDC base units / kWh
+    price: Mapped[Decimal] = mapped_column(Uint256, nullable=False)  # applied price
+    ema_price: Mapped[Decimal] = mapped_column(Numeric(30, 6), nullable=False)
+    supply_w: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
+    demand_w: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
+    band_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    breaker_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    breaker_reason: Mapped[str | None] = mapped_column(Text)
+    stale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    weather_age_s: Mapped[int | None] = mapped_column(Integer)
+    vol_bps: Mapped[Decimal | None] = mapped_column(Numeric(20, 4))
+    market_time: Mapped[int] = mapped_column(
+        BigInteger, nullable=False
+    )  # market clock (may be simulated)
+    quote_timestamp: Mapped[int | None] = mapped_column(BigInteger)  # chain clock the quote carries
+    clock_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    signature: Mapped[str | None] = mapped_column(Text)
+    drivers: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+
+class Market(Base, TimestampMixin):
+    """A market and the region it covers (a bounding box; all null = everywhere)."""
+
+    __tablename__ = "markets"
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    market_id: Mapped[str] = mapped_column(Bytes32, unique=True, nullable=False)  # keccak(name)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )  # pushed to PriceOracle
+    min_lat_e6: Mapped[int | None] = mapped_column(Integer)
+    max_lat_e6: Mapped[int | None] = mapped_column(Integer)
+    min_lon_e6: Mapped[int | None] = mapped_column(Integer)
+    max_lon_e6: Mapped[int | None] = mapped_column(Integer)
+
+
+class PricingParam(Base):
+    """A parameter override. scope is a market id, or '*' for all markets."""
+
+    __tablename__ = "pricing_params"
+    __table_args__ = (UniqueConstraint("scope", "key", name="uq_pricing_params_scope_key"),)
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    scope: Mapped[str] = mapped_column(String(66), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[str] = mapped_column(Address, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PricingParamChange(Base):
+    """Append-only audit trail of parameter changes."""
+
+    __tablename__ = "pricing_param_changes"
+    __table_args__ = (Index("ix_pricing_param_changes_scope_key", "scope", "key"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(String(66), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    old_value: Mapped[Any] = mapped_column(JSONB)
+    new_value: Mapped[Any] = mapped_column(JSONB)
+    changed_by: Mapped[str] = mapped_column(Address, nullable=False)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PricingEvent(Base):
+    """Breaker transitions and anomalies (the 'anomaly event' log)."""
+
+    __tablename__ = "pricing_events"
+    __table_args__ = (Index("ix_pricing_events_market_ts", "market_id", "ts"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     market_id: Mapped[str] = mapped_column(Bytes32, nullable=False)
-    raw_price: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
-    price: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
-    supply_wh: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
-    demand_wh: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
-    stale: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    signature: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
 
 
 class Settlement(Base, TimestampMixin):

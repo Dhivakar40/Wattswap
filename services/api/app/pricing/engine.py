@@ -305,6 +305,34 @@ def _step(
     return new_state, tick
 
 
+# ------------------------------------------------------------------------------ forecast
+def forecast_row(inputs: MarketInputs, params: PricingParams) -> dict[str, Any]:
+    """Supply, demand and the raw price implied by `inputs`, with no smoothing and no state.
+
+    Used for the 24-hour outlook: it shows where the raw price is heading, not where the
+    smoothed, rate-limited price will be.
+    """
+    with localcontext(CTX):
+        s = supply_terms(inputs, params)
+        d = demand_terms(inputs, params)
+        raw = raw_price(s, d, params)
+        return {
+            "time": inputs.market_time,
+            "ghi_wm2": ds(
+                sum((c.ghi_wm2 * c.capacity_w for c in inputs.cells), D(0))
+                / max(D(1), D(sum(c.capacity_w for c in inputs.cells))),
+                1,
+            ),
+            "generation_kw": ds(s.generation_kw),
+            "supply_kw": ds(s.effective_kw),
+            "demand_kw": ds(d.demand_kw),
+            "raw_price": raw.price,
+            "clamps": ([f"raw_{raw.clamp}"] if raw.clamp else [])
+            + (["ratio_cap"] if raw.ratio_capped else [])
+            + (["s_min"] if s.floor_applied else []),
+        }
+
+
 # --------------------------------------------------------------------------- restart support
 def restore_state(rows: Sequence[dict[str, Any]], params: PricingParams) -> EngineState:
     """Rebuild the engine state from persisted ticks (oldest first)."""

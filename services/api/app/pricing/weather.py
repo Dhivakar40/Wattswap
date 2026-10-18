@@ -137,6 +137,28 @@ def parse_retry_after(value: str | None) -> float | None:
     return seconds if math.isfinite(seconds) and 0 <= seconds <= 86_400 else None
 
 
+def interpolate_series(series: Series, ts: int) -> WeatherPoint | None:
+    """Linear interpolation between the hourly points around `ts`; None outside the data."""
+    hour = ts - ts % 3600
+    a = series.get(hour)
+    if a is None:
+        return None
+    b = series.get(hour + 3600)
+    if b is None:
+        return a
+    frac = Decimal(ts - hour) / Decimal(3600)
+
+    def mix(x: Decimal, y: Decimal) -> Decimal:
+        return x + (y - x) * frac
+
+    cloud = (
+        mix(a.cloud_cover_pct, b.cloud_cover_pct)
+        if a.cloud_cover_pct is not None and b.cloud_cover_pct is not None
+        else a.cloud_cover_pct
+    )
+    return WeatherPoint(mix(a.ghi_wm2, b.ghi_wm2), mix(a.temp_c, b.temp_c), cloud, a.direct_wm2)
+
+
 # --------------------------------------------------------------------------- Open-Meteo
 class OpenMeteo:
     def __init__(
@@ -305,33 +327,12 @@ class WeatherService:
         return RefreshResult("partial" if partial else "ok", cells_updated=len(fetched))
 
     # -- lookup ------------------------------------------------------------------------
-    @staticmethod
-    def _interpolate(series: Series, ts: int) -> WeatherPoint | None:
-        hour = ts - ts % 3600
-        a = series.get(hour)
-        if a is None:
-            return None
-        b = series.get(hour + 3600)
-        if b is None:
-            return a
-        frac = Decimal(ts - hour) / Decimal(3600)
-
-        def mix(x: Decimal, y: Decimal) -> Decimal:
-            return x + (y - x) * frac
-
-        cloud = (
-            mix(a.cloud_cover_pct, b.cloud_cover_pct)
-            if a.cloud_cover_pct is not None and b.cloud_cover_pct is not None
-            else a.cloud_cover_pct
-        )
-        return WeatherPoint(mix(a.ghi_wm2, b.ghi_wm2), mix(a.temp_c, b.temp_c), cloud, a.direct_wm2)
-
     def lookup(self, cell_id: str, ts: int) -> Lookup:
         """Weather for `ts` from the live series, with its real age."""
         slot = self._cells.get(cell_id)
         if slot is None or slot.fetched_at is None:
             return Lookup(None, 0, "none")
-        point = self._interpolate(slot.series, ts)
+        point = interpolate_series(slot.series, ts)
         age = int(self._clock() - slot.fetched_at)
         if point is None:
             return Lookup(None, age, "none")
@@ -365,5 +366,5 @@ class WeatherService:
             while len(self._history) > HISTORY_CACHE_DAYS:
                 self._history.popitem(last=False)
         # a day's series has no data beyond midnight; the next day is its own fetch
-        point = self._interpolate(series, ts)
+        point = interpolate_series(series, ts)
         return Lookup(point, 0, "archive" if point is not None else "none")

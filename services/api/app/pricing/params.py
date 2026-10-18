@@ -23,6 +23,10 @@ DEFAULT_LOAD_PROFILE: tuple[Decimal, ...] = tuple(
 )  # fmt: skip
 
 
+# Set by the service from its settings, not through the admin API.
+READONLY: frozenset[str] = frozenset({"tick_seconds"})
+
+
 class ParamError(ValueError):
     """Invalid parameters. `errors` maps parameter name to a message."""
 
@@ -78,7 +82,7 @@ class PricingParams:
     tick_seconds: int = 15
 
     def with_overrides(self, overrides: Mapping[str, Any]) -> "PricingParams":
-        return from_mapping(overrides, base=self)
+        return from_mapping(overrides, base=self, allow_readonly=True)
 
     def to_mapping(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -194,7 +198,9 @@ def _parse_decimal(key: str, raw: object) -> Decimal:
     return value
 
 
-def from_mapping(values: Mapping[str, Any], base: PricingParams | None = None) -> PricingParams:
+def from_mapping(
+    values: Mapping[str, Any], base: PricingParams | None = None, *, allow_readonly: bool = False
+) -> PricingParams:
     """Apply `values` on top of `base`, validating types, ranges and cross-parameter rules."""
     base = base or PricingParams()
     errors: dict[str, str] = {}
@@ -203,6 +209,9 @@ def from_mapping(values: Mapping[str, Any], base: PricingParams | None = None) -
         spec = SPECS.get(key)
         if spec is None:
             errors[key] = "unknown parameter"
+            continue
+        if key in READONLY and not allow_readonly:
+            errors[key] = "read-only here; set PRICING_TICK_SECONDS in the environment"
             continue
         try:
             if spec.kind == "bool":

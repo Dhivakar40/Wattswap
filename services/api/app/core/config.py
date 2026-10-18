@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     shared_dir: Path = Field(default_factory=_default_shared_dir)
     energy_token_address: str | None = None
     meter_registry_address: str | None = None
+    exchange_address: str | None = None
+    price_oracle_address: str | None = None
 
     # --- meter pipeline -----------------------------------------------------------------
     reading_interval_seconds: int = Field(default=900, ge=1)
@@ -73,6 +75,24 @@ class Settings(BaseSettings):
     mint_backoff_base_seconds: float = Field(default=1.0, gt=0)
     mint_backoff_max_seconds: float = Field(default=60.0, gt=0)
     chain_params_ttl_seconds: float = Field(default=30.0, ge=0)
+
+    # --- pricing engine -----------------------------------------------------------------
+    pricing_enabled: bool = True
+    pricing_embedded: bool = True  # False: run `python -m app.pricing.run` as its own process
+    pricing_tick_seconds: int = Field(default=15, ge=1)
+    weather_poll_seconds: int = Field(default=600, ge=300)  # stay well inside Open-Meteo limits
+    open_meteo_forecast_url: str = "https://api.open-meteo.com/v1/forecast"
+    open_meteo_archive_url: str = "https://archive-api.open-meteo.com/v1/archive"
+    open_meteo_timeout_seconds: float = Field(default=10.0, gt=0)
+    # real: market time is the wall clock. follow_readings: market time follows the newest
+    # ingested simulated interval while readings keep arriving (accelerated demo mode).
+    pricing_clock_mode: Literal["real", "follow_readings"] = "real"
+    clock_follow_window_seconds: int = Field(default=120, ge=1)
+    pricing_inventory_refresh_seconds: int = Field(default=30, ge=1)
+    pricing_inventory_source: Literal["auto", "held", "open_sells"] = "auto"
+    oracle_push_threshold_bps: int = Field(default=50, ge=1)
+    oracle_push_heartbeat_seconds: int = Field(default=120, ge=10)
+    oracle_push_min_interval_seconds: int = Field(default=30, ge=1)
 
     # --- rate limits (requests per window) ----------------------------------------------
     rate_limit_window_seconds: int = Field(default=60, ge=1)
@@ -133,6 +153,8 @@ class Settings(BaseSettings):
         override = {
             "EnergyToken": self.energy_token_address,
             "MeterRegistry": self.meter_registry_address,
+            "WattSwapExchange": self.exchange_address,
+            "PriceOracle": self.price_oracle_address,
         }.get(name)
         if override:
             return override

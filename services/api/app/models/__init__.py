@@ -9,10 +9,24 @@ from app.models.base import (
     SettlementStatus,
     UserRole,
 )
-from app.models.tables import Meter, Mint, Order, PriceTick, Reading, Settlement, Trade, User
+from app.models.tables import (
+    Market,
+    Meter,
+    Mint,
+    Order,
+    PriceTick,
+    PricingEvent,
+    PricingParam,
+    PricingParamChange,
+    Reading,
+    Settlement,
+    Trade,
+    User,
+)
 
 __all__ = [
     "Base",
+    "Market",
     "Meter",
     "Mint",
     "MintStatus",
@@ -20,6 +34,9 @@ __all__ = [
     "OrderSide",
     "OrderStatus",
     "PriceTick",
+    "PricingEvent",
+    "PricingParam",
+    "PricingParamChange",
     "Reading",
     "RegisterStatus",
     "Settlement",
