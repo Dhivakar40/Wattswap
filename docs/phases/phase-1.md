@@ -2,7 +2,7 @@
 
 Branch: `phase-1-contracts` · Target tag: `v0.1.0` (after approval)
 
-Status: **APPROVED ("go" received) — implementing.** Decisions below were confirmed or overridden by the owner; overrides are marked.
+Status: **IMPLEMENTED — awaiting PR approval.** Decisions below were confirmed or overridden by the owner; overrides are marked.
 
 ## Starting state
 
@@ -112,3 +112,41 @@ docs/phases/phase-1.md (updated at end) · Makefile, ci.yml, README (contracts s
 7. `feat(shared): export abis and addresses`
 8. `ci: add slither and coverage gates`
 9. `docs: settlement, threat model, ADRs, phase 1 outcome`
+
+---
+
+## Outcome (what was built)
+
+Deviations from the plan above, all small:
+
+- `PriceQuote` is `{marketId, price, timestamp}` (the planned `nonce` was dropped: quotes are valid while fresh, so a
+  nonce would be an unused field). `marketId` was added to the quote so a quote cannot be used for another market.
+- `EnergyToken.mint(Reading, deviceSig)` replaces `mintReading(...)` (ADR-003). The signed `Reading` is
+  `{meterId, readingId, amountWh, intervalStart, intervalSeconds}`; the interval must be complete.
+- Added `setMarket` (enabled markets) so arbitrary `marketId`s cannot settle. ADR numbers: 002 fill accounting,
+  003 on-chain meter verification, 004 permissionless settlement path.
+- `settle` takes the three signatures as `bytes memory` (not `calldata`): the legacy codegen hits "stack too deep"
+  with 8 parameters otherwise (viaIR is avoided so `forge coverage` stays accurate). Costs a little gas.
+- Deploy script `Deploy.s.sol` refuses chains other than 31337 and 11155111.
+
+## How to verify
+
+```
+cd contracts
+forge fmt --check && forge build
+forge test                                  # 90 tests (unit, fuzz, invariant, vectors, deploy)
+FOUNDRY_PROFILE=ci forge test               # 2048 fuzz runs, 256 invariant runs x depth 64
+bash ../scripts/check-coverage.sh           # >= 95% line coverage gate
+slither . --config-file slither.config.json --fail-medium
+anvil &                                      # then, with PRIVATE_KEY etc. (see make deploy-local):
+make deploy-local                           # needs GNU make; the equivalent commands are in the Makefile
+pnpm --filter @wattswap/shared test typecheck lint fmt:check
+```
+
+## Known limitations
+
+- Windows dev box lacks GNU `make`; the Makefile targets were not run through `make` locally. The commands they wrap
+  (forge, slither, coverage script, deploy script, exporter) were each run directly. CI runs them through `make`.
+- Sepolia deployment is scripted but not executed (Phase 8; needs funded key and RPC URL).
+- Slither: 6 Low (`timestamp`) and 1 Informational remain by design (threat-model.md).
+- No external audit.
