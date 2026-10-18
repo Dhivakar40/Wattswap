@@ -42,6 +42,9 @@ async def test_worker_mints_in_order_and_balance_matches(
     meter, key, alice = setup
     t = past_start(30)
     amounts = [300, 450, 600]
+    owner = Account.from_key(KEY_ALICE).address
+    # The chain is shared by the whole session: compare a delta, not an absolute balance.
+    before = token_contract(harness, web3_sync).functions.balanceOf(owner).call()
     for i, wh in enumerate(amounts):
         assert (
             await post_reading(harness, signed_reading(harness, meter, key, t + i * INTERVAL, wh))
@@ -57,7 +60,7 @@ async def test_worker_mints_in_order_and_balance_matches(
     assert blocks == sorted(blocks)  # oldest interval minted first
 
     token = token_contract(harness, web3_sync)
-    assert token.functions.balanceOf(Account.from_key(KEY_ALICE).address).call() == sum(amounts)
+    assert token.functions.balanceOf(owner).call() - before == sum(amounts)
     events = minted_events(harness, web3_sync, meter["meter_id"])
     assert [e["args"]["amountWh"] for e in events] == amounts
     registry = registry_contract(harness, web3_sync)

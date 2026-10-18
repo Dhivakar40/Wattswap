@@ -31,9 +31,23 @@ oracle key's nonce is serialised by a second Redis lock. Within a meter, mints g
 a transiently deferred reading blocks that meter's later ones for the pass, a *terminally failed* reading does
 not (it becomes a gap, which the contract allows).
 
-**Failures are decoded.** The worker simulates (`estimate_gas`) before spending gas. Reverts are decoded from the
-contract ABIs into `failure_reason` (`MeterInactive(meterId=…)`). `ReadingNotComplete` (chain clock behind the
-interval end) is treated as transient for `MINT_NOT_COMPLETE_GRACE_SECONDS` before failing.
+**What may mark a reading `failed`: only a decoded contract-level rejection.** The worker simulates
+(`estimate_gas`) before spending gas, and decodes reverts from the contract ABIs into `failure_reason`
+(`MeterInactive(meterId=…)`, `ReadingImplausible(…)`, `InvalidDeviceSignature`, …). That decoded error, whether seen
+in simulation or in a mined, reverted transaction, is the *only* path to `failed`. Everything else is infrastructure
+and retries indefinitely with exponential backoff (`MINT_BACKOFF_BASE_SECONDS` … `MINT_BACKOFF_MAX_SECONDS`), leaving
+the mint `pending`/`submitted` with no failure recorded:
+
+- RPC errors, timeouts, connection loss (per-mint backoff; the loop itself also backs off);
+- nonce problems: a persisted transaction whose nonce was consumed elsewhere (`nonce too low`) is re-queued and
+  re-signed; stuck transactions are fee-bumped;
+- gas problems: a mined revert with no contract error (e.g. out of gas) is re-queued with a fresh estimate;
+- reverts with no or undecodable data, and `ReadingNotComplete` (the chain clock is behind the interval end; it
+  clears by itself);
+- `ReadingAlreadyMinted` after a race: the existing mint is adopted, not failed.
+
+Failed readings stay visible: `GET /meters/{id}/readings` and `GET /mints` return `mint.status = failed` with the
+decoded `failure_reason`, so the owner can see the gap and why.
 
 ## Consequences
 

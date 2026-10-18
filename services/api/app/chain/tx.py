@@ -38,6 +38,12 @@ class TxRevertedError(Exception):
         self.info = info
 
 
+def is_stale_nonce(exc: Exception) -> bool:
+    """The node refused a transaction because its nonce was already used."""
+    text = str(exc).lower()
+    return "nonce too low" in text or "nonce is too low" in text or "invalid nonce" in text
+
+
 OnSigned = Callable[[SignedTx], Awaitable[None]]
 
 

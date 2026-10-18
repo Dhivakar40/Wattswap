@@ -28,7 +28,8 @@ from web3.contract.async_contract import AsyncContractFunction
 from web3.exceptions import TransactionNotFound
 
 from app.chain.client import ChainClient
-from app.chain.tx import SignedTx, TxRevertedError, TxSender
+from app.chain.revert import RevertInfo
+from app.chain.tx import SignedTx, TxRevertedError, TxSender, is_stale_nonce
 from app.core.config import Settings
 from app.core.metrics import MINTS, MINTS_PENDING
 from app.models import Meter, Mint, MintStatus, Reading
@@ -37,6 +38,19 @@ log = logging.getLogger("wattswap.mint_worker")
 
 LEADER_LOCK = "lock:mint-worker"
 FEE_BUMP_STEP = 1.25
+
+
+# A revert is a verdict on the READING only if the contract itself rejected it with a decodable error.
+_NOT_A_VERDICT = frozenset({"UnknownError", "UndecodableRevert"})
+
+
+def is_contract_rejection(info: RevertInfo | None) -> bool:
+    """True only for a decoded contract-level rejection (MeterInactive, ReadingImplausible, ...).
+
+    Not a rejection: no revert data, undecodable data, or a time-dependent error such as
+    ReadingNotComplete (it clears by itself once the chain clock passes the interval end).
+    """
+    return info is not None and info.name not in _NOT_A_VERDICT and not info.transient
 
 
 class MintWorker:
@@ -53,14 +67,38 @@ class MintWorker:
         self.redis = redis
         self.client = client
         self.sender = sender
+        # In-memory retry state per mint: (consecutive failures, monotonic time it may run again).
+        self._retry: dict[object, tuple[int, float]] = {}
+
+    # ------------------------------------------------------------------ retry/backoff
+    def _backoff(self, failures: int) -> float:
+        s = self.settings
+        return float(
+            min(s.mint_backoff_max_seconds, s.mint_backoff_base_seconds * 2 ** (failures - 1))
+        )
+
+    def _defer(self, mint_id: object, why: str) -> None:
+        """Infrastructure trouble (RPC, nonce, gas, timeouts): retry later, never fail the mint."""
+        failures = self._retry.get(mint_id, (0, 0.0))[0] + 1
+        delay = self._backoff(failures)
+        self._retry[mint_id] = (failures, time.monotonic() + delay)
+        log.warning(
+            "mint deferred, will retry",
+            extra={"mint_id": str(mint_id), "why": why, "failures": failures, "retry_in_s": delay},
+        )
+
+    def _due(self, mint_id: object) -> bool:
+        return time.monotonic() >= self._retry.get(mint_id, (0, 0.0))[1]
 
     # ------------------------------------------------------------------ main loop
     async def run(self, stop: asyncio.Event) -> None:
         """Single-writer loop: only the holder of the Redis leader lock mints."""
         lock = self.redis.lock(LEADER_LOCK, timeout=30)
         leader = False
+        loop_failures = 0
         try:
             while not stop.is_set():
+                pause = self.settings.mint_poll_seconds
                 try:
                     if not leader:
                         leader = await lock.acquire(blocking=False)
@@ -69,13 +107,16 @@ class MintWorker:
                     if leader:
                         await lock.reacquire()
                         await self.run_once()
+                    loop_failures = 0
                 except LockError:
                     leader = False
                     log.warning("mint worker lost leader lock")
                 except Exception:
-                    log.exception("mint worker iteration failed")
+                    loop_failures += 1
+                    pause = max(pause, self._backoff(loop_failures))
+                    log.exception("mint worker iteration failed", extra={"retry_in_s": pause})
                 try:
-                    await asyncio.wait_for(stop.wait(), self.settings.mint_poll_seconds)
+                    await asyncio.wait_for(stop.wait(), pause)
                 except TimeoutError:
                     pass
         finally:
@@ -96,8 +137,14 @@ class MintWorker:
                 await s.scalars(select(Mint.id).where(Mint.status == MintStatus.SUBMITTED))
             ).all()
         for mint_id in submitted:
-            if await self._drive(mint_id):
-                done += 1
+            if not self._due(mint_id):
+                continue
+            try:
+                if await self._drive(mint_id):
+                    done += 1
+                    self._retry.pop(mint_id, None)
+            except Exception as exc:  # RPC down, node rejected something, ...: retry, never fail
+                self._defer(mint_id, f"{type(exc).__name__}: {exc}")
 
         async with self.sessionmaker() as s:
             rows = (
@@ -112,11 +159,22 @@ class MintWorker:
         for mint_id, meter_pk in rows:
             if meter_pk in blocked:
                 continue  # keep per-meter order: an earlier reading is still unresolved
-            outcome = await self._process_pending(mint_id)
+            if not self._due(mint_id):
+                blocked.add(meter_pk)
+                continue
+            try:
+                outcome = await self._process_pending(mint_id)
+            except Exception as exc:  # RPC down etc.: the mint stays pending and is retried
+                self._defer(mint_id, f"{type(exc).__name__}: {exc}")
+                blocked.add(meter_pk)
+                continue
             if outcome == "done":
                 done += 1
+                self._retry.pop(mint_id, None)
             else:
                 blocked.add(meter_pk)
+                if outcome == "retry":
+                    self._defer(mint_id, "transient")
 
         async with self.sessionmaker() as s:
             pending = await s.scalar(
@@ -170,6 +228,14 @@ class MintWorker:
         MINTS.labels(status="failed").inc()
         log.warning("mint failed", extra={"reason": reason, "mint_id": str(mint.id)})
 
+    async def _requeue(self, s: AsyncSession, mint: Mint) -> None:
+        """Back to pending with the dead transaction forgotten (attempts is kept for audit)."""
+        mint.status = MintStatus.PENDING
+        mint.tx_hash = None
+        mint.raw_tx = None
+        mint.tx_nonce = None
+        await s.commit()
+
     async def _adopt_existing(self, s: AsyncSession, mint: Mint, reading: Reading) -> bool:
         """If the chain already minted this reading (crash after mining), adopt it."""
         if not await self.client.reading_minted(reading.reading_id):
@@ -213,17 +279,21 @@ class MintWorker:
             try:
                 await self.sender.submit(fn, on_signed=persist)
             except TxRevertedError as exc:
-                if exc.info is not None and exc.info.transient:
-                    age = (datetime.now(UTC) - reading.received_at).total_seconds()
-                    if age < self.settings.mint_not_complete_grace_seconds:
-                        log.info("mint deferred: %s", exc)
-                        return "wait"
-                await self._finish_failed(s, mint, str(exc))
-                return "done"
-            except Exception:
-                log.exception("mint submit failed; will retry")
+                info = exc.info
+                if info is not None and info.name == "ReadingAlreadyMinted":
+                    # Raced with an earlier attempt that landed: adopt it, never fail it.
+                    return "done" if await self._adopt_existing(s, mint, reading) else "retry"
+                if is_contract_rejection(info):
+                    await self._finish_failed(s, mint, str(exc))
+                    return "done"
+                # Time-dependent (ReadingNotComplete) or not decodable into a contract error:
+                # not a verdict on the reading. Keep it pending and retry with backoff.
+                log.info("mint not rejected by the contract, will retry: %s", exc)
+                return "retry"
+            except Exception as exc:
+                log.warning("mint submit failed; will retry: %s", exc)
                 # If `persist` already ran, the row is SUBMITTED and _drive will re-broadcast.
-                return "wait"
+                return "retry"
             mint_pk = mint.id
         return "done" if await self._drive(mint_pk, wait=True) else "wait"
 
@@ -258,8 +328,14 @@ class MintWorker:
                 await self._finish_confirmed(s, mint, block, mint.tx_hash)
             else:
                 info = await self.sender.revert_reason(mint.tx_hash)
-                await self._finish_failed(s, mint, str(info) if info else "transaction reverted")
-            return True
+                if is_contract_rejection(info):
+                    await self._finish_failed(s, mint, str(info))
+                    return True
+                # Mined but reverted with no contract error (e.g. out of gas, or state that has
+                # since changed): not a verdict on the reading. Re-sign from scratch.
+                log.warning("mined tx reverted without a contract error; re-queueing")
+                await self._requeue(s, mint)
+                return False
 
         # No receipt for our tx. A previous (fee-bumped) attempt may have been mined instead.
         if await self._adopt_existing(s, mint, reading):
@@ -270,9 +346,17 @@ class MintWorker:
             await self.client.w3.eth.get_transaction(mint.tx_hash)  # type: ignore[arg-type]
         except TransactionNotFound:
             log.info("re-broadcasting persisted tx", extra={"tx": mint.tx_hash})
-            await self.sender.broadcast(
-                SignedTx(raw=mint.raw_tx, tx_hash=mint.tx_hash, nonce=int(mint.tx_nonce or 0))
-            )
+            try:
+                await self.sender.broadcast(
+                    SignedTx(raw=mint.raw_tx, tx_hash=mint.tx_hash, nonce=int(mint.tx_nonce or 0))
+                )
+            except Exception as exc:
+                if not is_stale_nonce(exc):
+                    raise  # RPC trouble: handled by the caller's backoff, mint stays submitted
+                # The nonce was consumed by another transaction and ours never mined (no receipt,
+                # not minted on-chain). The persisted tx can never land: sign a fresh one.
+                log.warning("persisted tx has a consumed nonce; re-queueing")
+                await self._requeue(s, mint)
             return False
 
         # Known but not mined: replace with a higher fee once it has been pending too long.

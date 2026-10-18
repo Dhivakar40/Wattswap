@@ -188,7 +188,7 @@ make deploy-local && make sim  # live demo against the Docker stack; watch WATT 
 - Role keys are plain environment variables (KMS/HSM in production).
 - Only EOA device signatures are verified at ingest; EIP-1271 device wallets work on-chain but would be rejected by the API.
 - Mint throughput is one tx per confirmation round per oracle key (fine for 15-minute readings).
-- A permanently failed reading becomes an unfillable gap by design (the contract cannot go backwards).
+- A reading is `failed` only on a decoded contract-level rejection (ADR-005); it then becomes an unfillable gap by design (the contract cannot go backwards), visible with its reason in `GET /meters/{id}/readings`. RPC, timeout, nonce and gas problems retry forever with backoff.
 - `AdminDep` and the admin allow-list are wired and the role is exercised, but no admin-only endpoint exists until Phase 6.
 - `ORDERS/TRADES/PRICE_TICKS/SETTLEMENTS` are schema only; no endpoints.
 - Accelerated demo mode is catch-up pacing against real chain time, not chain time travel, so it only replays the past (it stops accelerating once it reaches the present).

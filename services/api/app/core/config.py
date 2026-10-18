@@ -70,7 +70,8 @@ class Settings(BaseSettings):
     mint_poll_seconds: float = Field(default=1.0, gt=0)
     mint_tx_timeout_seconds: float = Field(default=60.0, gt=0)
     mint_max_attempts: int = Field(default=5, ge=1)
-    mint_not_complete_grace_seconds: int = Field(default=600, ge=0)
+    mint_backoff_base_seconds: float = Field(default=1.0, gt=0)
+    mint_backoff_max_seconds: float = Field(default=60.0, gt=0)
     chain_params_ttl_seconds: float = Field(default=30.0, ge=0)
 
     # --- rate limits (requests per window) ----------------------------------------------
