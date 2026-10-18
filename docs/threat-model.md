@@ -98,6 +98,31 @@ is by design for a labeled demo.
 | P-10 | Start-up race creates duplicate markets | Idempotent `INSERT .. ON CONFLICT DO NOTHING` | `test_concurrent_start_up_creates_the_default_market_exactly_once` |
 | P-11 | Wash trading or spoofed bids move the price | Out of scope until the order book exists (Phase 4); bids and fills enter demand with bounded weights and are clamped by the ratio cap | model tests |
 
+## Trading: order book, matcher, relayer, listener (Phase 4)
+
+| # | Threat | Mitigation | Evidence |
+|---|---|---|---|
+| T4-1 | An order accepted off-chain reverts on-chain (malleable/compact signature) and burns relayer gas | The API enforces OpenZeppelin's exact signature rules (65 bytes, v 27/28, low s); contract wallets via ERC-1271 | `test_order_signatures.py`, `test_signature_and_format_rejections` |
+| T4-2 | Python and Solidity disagree on the order hash (silent invalid orders) | Hand-rolled and `eth_account` digests, Foundry-generated vectors incl. edge values, CI-gated byte-identical signatures, `hashOrder` equality on Anvil | `test_order_vectors.py`, `test_posting_the_same_signed_order_twice_*` |
+| T4-3 | Replay of an order on another chain or deployment | Domain separator binds chain id and exchange address | `test_domain_binds_chain_and_contract` |
+| T4-4 | Over-commitment: many orders against one balance/allowance | Total open commitment per token must fit balance AND allowance at acceptance; sweeper re-checks, newest orders cancelled first | `test_a_maker_cannot_commit_more_than_balance_*`, `test_sweeper_cancels_orders_*` |
+| T4-5 | Funding check double-counts a fill in the mined-but-unconfirmed window and cancels healthy orders | Pinned-block snapshot using the chain's `filled` | ADR-008, settlement tests |
+| T4-6 | Order spam / relayer gas griefing | Per-address placement limit and open-order cap before any chain call; min order/fill/cost; dry-run and pre-flight before every send; pair cooldown | `test_order_placement_is_rate_limited_*`, `test_no_gas_is_spent_on_dust_sized_fills` |
+| T4-7 | Two matchers/relayers act at once and double-allocate | Redis leader locks + `FOR UPDATE` + ownership re-check before commit + DB CHECK on reservations | `test_two_matchers_*`, `test_concurrent_cycles_*`, `test_losing_the_lock_*` |
+| T4-8 | Maker cancels on-chain while matched/submitted | Pre-flight check; mined revert classified as cancel race: settlement failed, order removed, counterparty freed, never retried | `test_on_chain_cancel_*` |
+| T4-9 | Quote ages out between signing and mining | Validity margin when signing, same-nonce replacement with a fresh quote, `StaleQuote` treated as transient | `test_a_quote_without_enough_validity_*`, `test_a_stuck_settle_is_replaced_*` |
+| T4-10 | Crossed pair outside the quote band reverts forever (hot loop) | Band-feasible matching; releases back off exponentially per pair | `test_a_price_move_*_rematch_loop` |
+| T4-11 | Crash between signing and broadcast loses or duplicates a settlement | Raw tx persisted before broadcast; restart re-sends the same tx; exactly one `TradeSettled` | `test_relayer_crash_after_signing_*` |
+| T4-12 | Reorg leaves the DB claiming a fill that no longer exists | Reversible event application, block-hash window, rollback and re-apply; reconcile repairs drift | `test_listener_rolls_back_a_reorged_settlement_*`, `test_reconciliation_*` |
+| T4-13 | Replayed/duplicated logs double-apply fills | UNIQUE `(tx_hash, log_index)`, apply only on insert | `test_listener_is_idempotent_*` |
+| T4-14 | Off-chain cancel assumed to be binding | API states `binding_onchain: false`; reserved Wh never cancelled off-chain; ADR-004 addendum for permissionless settlement | `test_off_chain_cancel_*` |
+| T4-15 | Relayer key compromise | Distinct role key (boot refuses shared keys); impact bounded by signed orders, quote band, staleness and role revocation; production would use a KMS/HSM | ADR-006 |
+| T4-16 | Wash trading / spoofed bids move the engine's price | Bids must be funded to stay on the book; demand weights are bounded and the price is rate-limited; self-trades never match. Cross-account wash trading is not prevented (testnet scope) | pricing tests, `test_a_maker_is_never_matched_with_themselves` |
+
+Residual: the relayer still chooses among valid matches and any price inside limits ∩ band (ADR-004). A maker can
+fail a settlement by moving funds after the pre-flight; it costs the relayer one failed transaction and gets that
+order cancelled as unfunded.
+
 ## Known limitations / out of scope for Phase 1
 
 - No third-party audit. Do not deploy with real value.
