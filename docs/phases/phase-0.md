@@ -70,3 +70,40 @@ Out: any real contract/business logic (Phase 1+). Scaffolds contain only what is
 
 - No business logic, no migrations, no Slither yet.
 - Anvil keys are the public well-known dev keys, for local use only.
+
+---
+
+# Outcome (updated at end of phase)
+
+## What was built
+
+Everything in the Deliverables table, with these differences from the plan:
+
+- Foundry was installed natively via `foundryup` (v1.8.5); the Docker fallback exists in the Makefile but was not needed.
+- `make doctor` added (checks tools, versions, Python 3.12, Docker daemon; prints install hints).
+- Tailwind 3.4, hand-initialised shadcn/ui, dark-default design tokens and TypeScript strict are in place; wagmi/RainbowKit etc. deferred to Phase 6.
+- A bootstrap commit (`CLAUDE.md`, `.gitignore`, `.gitattributes`) was pushed to `main` first, as approved.
+- Decisions are recorded in `docs/adr/001-phase-0-toolchain.md`.
+
+## How to verify
+
+```bash
+make doctor && make install
+make lint && make test
+make up            # then: curl localhost:8000/health ; curl localhost:8000/ready ; open http://localhost:3000
+make down
+```
+
+## Verified locally (Windows 11, Git Bash)
+
+- `make lint`, `make test`, `make fmt`, `make build`, `make clean`, `make env`, `make install`, `make doctor`: exit 0.
+- Tests: forge 1, api 6, meter-sim 2, shared 2, web 2, all passing.
+- `make up`: all 5 services healthy. `/health` 200, `/ready` 200 (postgres ok, redis ok), web page renders "Online (ok)", Anvil `eth_chainId` = 0x7a69 (31337). `make down` clean.
+
+## Known limitations
+
+- No business logic, no DB models or migrations, no Slither job yet (Phase 1).
+- `web` container has no Docker healthcheck; `--wait` treats "running" as ready.
+- `next lint` is deprecated in Next 16; migrate to ESLint CLI later.
+- `docker` CI job only builds images; it does not run `compose up`.
+- Anvil keys are public dev keys.
