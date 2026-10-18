@@ -94,6 +94,40 @@ class Settings(BaseSettings):
     oracle_push_heartbeat_seconds: int = Field(default=120, ge=10)
     oracle_push_min_interval_seconds: int = Field(default=30, ge=1)
 
+    # --- trading (order book, matcher, relayer, listener) --------------------------------
+    trading_enabled: bool = True
+    trading_embedded: bool = True  # False: run `python -m app.trading.run` as its own process
+    min_order_wh: int = Field(default=100, ge=1)  # 0.1 kWh
+    min_fill_wh: int = Field(default=100, ge=1)
+    min_fill_cost: int = Field(default=1000, ge=1)  # mUSDC base units; keeps gas worth spending
+    min_limit_price: int = Field(default=1000, ge=1)  # mUSDC base units per kWh
+    max_limit_price: int = Field(default=100_000_000, ge=1)  # 100 mUSDC per kWh
+    min_order_life_seconds: int = Field(default=60, ge=1)
+    max_order_life_seconds: int = Field(default=7 * 86400, ge=60)
+    expiry_margin_seconds: int = Field(default=90, ge=0)  # must outlive submit + mining
+    max_open_orders_per_maker: int = Field(default=50, ge=1)
+    rate_limit_orders: int = Field(default=30, ge=1)  # order placements per address per window
+    match_poll_ms: int = Field(default=500, ge=50)
+    quote_safety_margin_seconds: int = Field(default=60, ge=1)
+    band_safety_pct: int = Field(default=90, ge=1, le=100)  # share of the on-chain band we use
+    settle_confirmations: int = Field(default=1, ge=1)
+    settle_max_in_flight: int = Field(default=4, ge=1)
+    settle_max_attempts: int = Field(default=5, ge=1)
+    settle_bump_after_seconds: float = Field(default=20.0, gt=0)
+    settle_tx_timeout_seconds: float = Field(default=300.0, gt=0)
+    settle_backoff_base_seconds: float = Field(default=1.0, gt=0)
+    settle_backoff_max_seconds: float = Field(default=60.0, gt=0)
+    relayer_poll_seconds: float = Field(default=0.5, gt=0)
+    pair_cooldown_seconds: int = Field(default=30, ge=1)
+    pair_cooldown_max_seconds: int = Field(default=600, ge=1)
+    funding_sweep_seconds: float = Field(default=20.0, gt=0)
+    listener_confirmations: int = Field(default=2, ge=1)
+    listener_reorg_window: int = Field(default=64, ge=2)
+    listener_batch_blocks: int = Field(default=500, ge=1)
+    listener_poll_seconds: float = Field(default=1.0, gt=0)
+    reconcile_seconds: float = Field(default=120.0, gt=0)
+    trading_leader_ttl_seconds: int = Field(default=30, ge=5)
+
     # --- rate limits (requests per window) ----------------------------------------------
     rate_limit_window_seconds: int = Field(default=60, ge=1)
     rate_limit_ip: int = Field(default=300, ge=1)
