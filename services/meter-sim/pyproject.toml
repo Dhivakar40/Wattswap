@@ -3,10 +3,21 @@ name = "wattswap-meter-sim"
 version = "0.0.0"
 description = "Labeled smart-meter SIMULATOR for WattSwap (not real hardware)"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "eth-abi>=5",
+    "eth-account>=0.13,<0.14",
+    "eth-utils>=5",
+    "httpx>=0.28",
+]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "ruff>=0.8", "mypy>=1.13"]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+]
 
 [tool.uv]
 package = false
@@ -19,12 +30,19 @@ target-version = "py312"
 select = ["E", "F", "W", "I", "B", "UP", "N", "S", "ANN", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+"tests/**" = ["S101", "S105", "S311"]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[[tool.mypy.overrides]]
+# These libraries ship type hints but do not re-export their public names explicitly.
+module = ["eth_utils", "eth_utils.*", "eth_abi", "eth_abi.*", "eth_account.*"]
+implicit_reexport = true
