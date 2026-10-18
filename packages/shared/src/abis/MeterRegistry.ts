@@ -78,6 +78,19 @@ export const meterRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "RECORDER_ROLE",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "REGISTRAR_ROLE",
     "inputs": [],
     "outputs": [
@@ -203,6 +216,25 @@ export const meterRegistryAbi = [
   },
   {
     "type": "function",
+    "name": "lastIntervalEnd",
+    "inputs": [
+      {
+        "name": "meterId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "maxEnergyWh",
     "inputs": [
       {
@@ -250,6 +282,45 @@ export const meterRegistryAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "recordReading",
+    "inputs": [
+      {
+        "name": "meterId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "amountWh",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "intervalStart",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "intervalSeconds",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "deviceSigner",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "nonpayable"
   },
   {
     "type": "function",
@@ -435,40 +506,6 @@ export const meterRegistryAbi = [
     "stateMutability": "nonpayable"
   },
   {
-    "type": "function",
-    "name": "validateReading",
-    "inputs": [
-      {
-        "name": "meterId",
-        "type": "bytes32",
-        "internalType": "bytes32"
-      },
-      {
-        "name": "amountWh",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "intervalSeconds",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "owner",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "deviceSigner",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
     "type": "event",
     "name": "DeviceSignerRotated",
     "inputs": [
@@ -489,6 +526,31 @@ export const meterRegistryAbi = [
         "type": "address",
         "indexed": true,
         "internalType": "address"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "IntervalRecorded",
+    "inputs": [
+      {
+        "name": "meterId",
+        "type": "bytes32",
+        "indexed": true,
+        "internalType": "bytes32"
+      },
+      {
+        "name": "intervalStart",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "intervalEnd",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
       }
     ],
     "anonymous": false
@@ -698,6 +760,27 @@ export const meterRegistryAbi = [
         "name": "neededRole",
         "type": "bytes32",
         "internalType": "bytes32"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "IntervalOverlap",
+    "inputs": [
+      {
+        "name": "meterId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "intervalStart",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "lastIntervalEnd",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ]
   },
