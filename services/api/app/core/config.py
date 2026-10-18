@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     mint_max_attempts: int = Field(default=5, ge=1)
     mint_backoff_base_seconds: float = Field(default=1.0, gt=0)
     mint_backoff_max_seconds: float = Field(default=60.0, gt=0)
+    # Gas-price ceiling for every transaction this API sends (mint, settle, oracle). Fee bumps never
+    # exceed it; above it, transactions are held and retried later, never sent.
+    max_fee_per_gas_gwei: float = Field(default=100.0, gt=0)
+    max_priority_fee_gwei: float = Field(default=5.0, gt=0)
     chain_params_ttl_seconds: float = Field(default=30.0, ge=0)
 
     # --- pricing engine -----------------------------------------------------------------
@@ -112,6 +116,7 @@ class Settings(BaseSettings):
     quote_safety_margin_seconds: int = Field(default=60, ge=1)
     band_safety_pct: int = Field(default=90, ge=1, le=100)  # share of the on-chain band we use
     settle_max_in_flight: int = Field(default=4, ge=1)
+    settle_hold_retry_seconds: float = Field(default=5.0, gt=0)  # gas above the ceiling: retry
     settle_max_attempts: int = Field(default=5, ge=1)
     settle_bump_after_seconds: float = Field(default=20.0, gt=0)
     settle_backoff_base_seconds: float = Field(default=1.0, gt=0)

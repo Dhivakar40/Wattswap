@@ -17,6 +17,7 @@ from web3.types import TxReceipt
 
 from app.chain.client import ChainClient
 from app.chain.revert import RevertInfo
+from app.core.metrics import TX_HELD
 
 log = logging.getLogger("wattswap.chain.tx")
 
@@ -28,6 +29,19 @@ class SignedTx:
     raw: str  # 0x-hex signed transaction
     tx_hash: str
     nonce: int
+
+
+class FeeCeilingError(Exception):
+    """The transaction was NOT sent because of the gas-price ceiling.
+
+    `reason`: "network_above_ceiling" (the network price is higher than MAX_FEE_PER_GAS_GWEI, so
+    hold and retry later) or "bump_at_ceiling" (a replacement cannot outbid the previous tx without
+    exceeding the ceiling).
+    """
+
+    def __init__(self, reason: str, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 class TxRevertedError(Exception):
@@ -64,15 +78,45 @@ class TxSender:
         return str(self.account.address)
 
     async def _fees(self, bump: float) -> dict[str, int]:
+        """EIP-1559 fees for this attempt, never above the configured ceiling.
+
+        The *network* price (base fee x 2 + tip, unbumped) above MAX_FEE_PER_GAS_GWEI means: hold,
+        send nothing. A bumped fee is clamped to the ceiling; once the previous attempt was already at the
+        ceiling, a further bump is refused (an identical replacement would be rejected anyway).
+        """
         w3 = self.client.w3
+        cfg = self.client.settings
+        max_fee_cap = int(cfg.max_fee_per_gas_gwei * 10**9)
+        prio_cap = int(cfg.max_priority_fee_gwei * 10**9)
         block = await w3.eth.get_block("latest")
         base = int(block.get("baseFeePerGas", 0))
-        prio = int(await w3.eth.max_priority_fee)
-        prio_b = int(prio * bump) + (1 if bump > 1 else 0)
-        return {
-            "maxPriorityFeePerGas": prio_b,
-            "maxFeePerGas": int((base * 2 + prio) * bump) + prio_b,
-        }
+        prio = min(int(await w3.eth.max_priority_fee), prio_cap)
+        network_max = base * 2 + prio
+        if network_max > max_fee_cap:
+            TX_HELD.labels(self.name, "network_above_ceiling").inc()
+            log.warning(
+                "tx held: network fee above the ceiling",
+                extra={"sender": self.name, "network_max_fee": network_max, "ceiling": max_fee_cap},
+            )
+            raise FeeCeilingError(
+                "network_above_ceiling",
+                f"network max fee {network_max} wei exceeds the ceiling {max_fee_cap} wei",
+            )
+        prio_b = min(int(prio * bump) + (1 if bump > 1 else 0), prio_cap)
+        want = int(network_max * bump) + (prio_b - prio)
+        max_fee = min(want, max_fee_cap)
+        if bump > 1 and want > max_fee_cap and want * 4 // 5 >= max_fee_cap:
+            # The previous attempt (one 1.25x step lower) was already at the ceiling: a clamped
+            # replacement would carry the same fee and be rejected by the node.
+            TX_HELD.labels(self.name, "bump_at_ceiling").inc()
+            log.warning(
+                "tx bump refused: would exceed the ceiling",
+                extra={"sender": self.name, "wanted": want, "ceiling": max_fee_cap},
+            )
+            raise FeeCeilingError(
+                "bump_at_ceiling", f"bumped fee {want} wei exceeds ceiling {max_fee_cap} wei"
+            )
+        return {"maxPriorityFeePerGas": min(prio_b, max_fee), "maxFeePerGas": max_fee}
 
     async def simulate(self, fn: AsyncContractFunction) -> int:
         """Gas estimate; doubles as a dry run (raises TxRevertedError with the decoded error)."""

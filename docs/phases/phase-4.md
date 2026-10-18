@@ -281,6 +281,9 @@ make up && make deploy-local && make sim && make trade-demo
 - Off-chain cancel is not binding on-chain (documented, ADR-004 addendum); the UI must offer the on-chain cancel.
 - Funding/pre-flight reads are per maker with several RPC calls each; fine for demo scale, a multicall would be the next optimisation.
 - Cross-account wash trading is not prevented (testnet scope).
-- The relayer pipelines at most `SETTLE_MAX_IN_FLIGHT` settlements; no gas-price ceiling is configured.
+- The relayer pipelines at most `SETTLE_MAX_IN_FLIGHT` settlements.
 - `GET /markets/{id}/book` is polled; the WebSocket gateway (Phase 5) will forward the Redis events.
 - Reorgs deeper than `LISTENER_REORG_WINDOW` stop the listener with an error instead of guessing.
+
+### Pre-merge addition: gas-price ceiling
+`TxSender` (relayer, mint worker, oracle pusher) enforces `MAX_FEE_PER_GAS_GWEI` (default 100) and `MAX_PRIORITY_FEE_GWEI` (5). Network price above the ceiling: nothing is signed or sent, the tx is held (log + `wattswap_tx_held_total{sender,reason}`) and retried. Bumps are clamped; a bump is refused once the previous attempt was already at the ceiling (the pending tx is kept). A held settlement is re-quoted on every retry and released with a pair cooldown once it has been held as long as a quote stays usable, or no usable quote exists. Tests: `tests/integration/test_gas_ceiling.py`.

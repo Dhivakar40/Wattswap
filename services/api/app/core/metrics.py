@@ -53,3 +53,9 @@ INVARIANT_VIOLATIONS = Counter(
     "wattswap_matcher_invariant_violations_total",
     "Matcher produced a pair the exchange rejected as malformed (a bug)",
 )
+
+TX_HELD = Counter(
+    "wattswap_tx_held_total",
+    "Transactions held back by the gas-price ceiling (not sent)",
+    ["sender", "reason"],
+)

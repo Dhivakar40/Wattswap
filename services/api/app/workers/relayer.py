@@ -33,7 +33,7 @@ from web3.contract.async_contract import AsyncContractFunction
 from app.chain.client import ChainClient
 from app.chain.revert import RevertInfo
 from app.chain.settle_errors import ALARMING, Verdict, classify
-from app.chain.tx import SignedTx, TxRevertedError, TxSender
+from app.chain.tx import FeeCeilingError, SignedTx, TxRevertedError, TxSender
 from app.core.config import Settings
 from app.core.metrics import (
     INVARIANT_VIOLATIONS,
@@ -101,6 +101,8 @@ class Relayer:
         # Test seam: called after the signed tx is persisted and BEFORE it is broadcast.
         self.before_broadcast: Callable[[Settlement], Awaitable[None]] | None = None
         self._infra: dict[uuid.UUID, tuple[int, float]] = {}
+        # settlement id -> monotonic time it was first held back by the gas-price ceiling
+        self._held_since: dict[uuid.UUID, float] = {}
 
     # ----------------------------------------------------------------------------- loop
     async def run_once(self) -> RelayerCycle:
@@ -156,14 +158,31 @@ class Relayer:
             orders = await lifecycle.lock_orders(s, [trade.buy_order_id, trade.sell_order_id])
             buy, sell = orders[trade.buy_order_id], orders[trade.sell_order_id]
             try:
+                if sid in self._held_since and await self._hold_expired(sid):
+                    self._held_since.pop(sid, None)
+                    await self._release(s, st, buy, sell, "fee_ceiling_hold", out)
+                    await s.commit()
+                    cycle.released += 1
+                    await out.flush(self.redis, self.sessionmaker)
+                    return
                 prepared, why = await self._prepare(s, st, trade, buy, sell, out, resubmit=False)
                 if prepared is None:
                     await s.commit()
                     self._count(cycle, why)
                     return
                 await self._send(s, st, prepared, nonce=None, bump=1.0)
+                self._held_since.pop(sid, None)
                 cycle.submitted += 1
                 SETTLEMENTS.labels("submitted").inc()
+            except FeeCeilingError as exc:
+                # Gas is above the ceiling: send nothing, retry shortly with a fresh quote.
+                self._held_since.setdefault(sid, time.monotonic())
+                st.next_attempt_at = lifecycle.now() + timedelta(
+                    seconds=self.settings.settle_hold_retry_seconds
+                )
+                await s.commit()
+                cycle.deferred += 1
+                cycle.notes.append(f"held:{exc.reason}")
             except TxRevertedError as exc:
                 await self._apply_revert(s, st, buy, sell, exc.info, out, mined=False)
                 await s.commit()
@@ -173,6 +192,25 @@ class Relayer:
                 self._defer(sid, f"{type(exc).__name__}: {exc}")
                 cycle.deferred += 1
         await out.flush(self.redis, self.sessionmaker)
+
+    async def _hold_expired(self, sid: uuid.UUID) -> bool:
+        """A held settlement must not outlive its quote: give up once the hold is as long as a
+        freshly signed quote stays usable, or when there is no usable quote to retry with."""
+        cfg = self.settings
+        params = await self.client.exchange_params()
+        usable = params.max_staleness - cfg.quote_safety_margin_seconds
+        if time.monotonic() - self._held_since[sid] >= usable:
+            return True
+        st_trade = None
+        async with self.sessionmaker() as s:
+            st = await s.get(Settlement, sid)
+            st_trade = await s.get(Trade, st.trade_id) if st else None
+        if st_trade is None:
+            return False
+        quote = await load_quote(self.redis, st_trade.market_id)
+        chain_now = await self.client.latest_block_timestamp()
+        retry = cfg.settle_hold_retry_seconds
+        return quote is None or chain_now - quote.timestamp + retry > usable
 
     def _count(self, cycle: RelayerCycle, why: str) -> None:
         if why == "released":
@@ -407,7 +445,14 @@ class Relayer:
             cycle.notes.append(f"bump_skipped:{why}")
             return
         bump = FEE_BUMP_STEP ** len(st.tx_hashes)
-        await self._send(s, st, prepared, nonce=st.tx_nonce, bump=bump)
+        try:
+            await self._send(s, st, prepared, nonce=st.tx_nonce, bump=bump)
+        except FeeCeilingError as exc:
+            # Cannot outbid within the ceiling: keep the pending tx. If its quote goes stale it
+            # reverts StaleQuote on-chain and is re-queued with a fresh quote.
+            log.warning("bump held by the gas-price ceiling", extra={"reason": exc.reason})
+            cycle.notes.append(f"bump_held:{exc.reason}")
+            return
         cycle.bumped += 1
 
     async def _infer_revert(self, st: Settlement, block_number: int) -> RevertInfo | None:

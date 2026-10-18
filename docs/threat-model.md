@@ -118,6 +118,7 @@ is by design for a labeled demo.
 | T4-14 | Off-chain cancel assumed to be binding | API states `binding_onchain: false`; reserved Wh never cancelled off-chain; ADR-004 addendum for permissionless settlement | `test_off_chain_cancel_*` |
 | T4-15 | Relayer key compromise | Distinct role key (boot refuses shared keys); impact bounded by signed orders, quote band, staleness and role revocation; production would use a KMS/HSM | ADR-006 |
 | T4-16 | Wash trading / spoofed bids move the engine's price | Bids must be funded to stay on the book; demand weights are bounded and the price is rate-limited; self-trades never match. Cross-account wash trading is not prevented (testnet scope) | pricing tests, `test_a_maker_is_never_matched_with_themselves` |
+| T4-17 | A gas spike drains the relayer/oracle/pricer keys, or fee bumps escalate without bound | `MAX_FEE_PER_GAS_GWEI` / `MAX_PRIORITY_FEE_GWEI` in `TxSender` (all senders): a network price above the ceiling holds the tx (logged, `wattswap_tx_held_total`); bumps clamp to the ceiling and are refused once the previous attempt was at it; a held settlement is released (pair cooldown) before its quote can go stale | `tests/integration/test_gas_ceiling.py` |
 
 Residual: the relayer still chooses among valid matches and any price inside limits ∩ band (ADR-004). A maker can
 fail a settlement by moving funds after the pre-flight; it costs the relayer one failed transaction and gets that
