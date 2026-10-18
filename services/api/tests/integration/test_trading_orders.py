@@ -80,10 +80,10 @@ async def test_signature_and_format_rejections(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=h.app), base_url="https://localhost"
         ) as anon:  # h.client keeps the cookie of the last login
-            r = await anon.post(
+            unauth = await anon.post(
                 "/api/v1/orders", json={k: v for k, v in good.items() if k[0] != "_"}
             )
-        assert r.status_code == 401
+        assert unauth.status_code == 401
 
         # an order signed for ANOTHER chain/contract has a different digest => bad signature
         replay = seller.body("sell", 1_000, 140_000)

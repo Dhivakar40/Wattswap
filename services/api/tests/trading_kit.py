@@ -10,6 +10,7 @@ import asyncio
 import json
 import secrets
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -178,7 +179,7 @@ class Trader:
         )
         client = self.h.app.state.chain.client
         digest = eip712.order_digest(self.h.settings.chain_id, client.exchange_address, data)
-        sig = Account._sign_hash(digest, self.key)  # noqa: SLF001
+        sig = Account._sign_hash(digest, self.key)
         return {
             "maker": self.address,
             "marketId": data.market_id,
@@ -307,6 +308,7 @@ async def rows(h: Harness, model: Any, **where: Any) -> list[Any]:
 
 async def order_row(h: Harness, order_hash: str) -> Order:
     (o,) = await rows(h, Order, order_hash=order_hash)
+    assert isinstance(o, Order)
     return o
 
 
@@ -330,6 +332,16 @@ def order_struct(body: dict[str, Any]) -> tuple[Any, ...]:
         int(body["nonce"]),
         bytes.fromhex(body["salt"][2:]),
     )
+
+
+async def wait_until(predicate: Callable[[], Awaitable[bool]], within: float = 40.0) -> None:
+    """Poll an async condition until it holds (background workers are running)."""
+    deadline = asyncio.get_event_loop().time() + within
+    while asyncio.get_event_loop().time() < deadline:
+        if await predicate():
+            return
+        await asyncio.sleep(0.2)
+    raise AssertionError("condition not reached in time")
 
 
 def now() -> float:

@@ -70,7 +70,7 @@ async def pair(
 
 def relayer_nonce(h: Harness, c: Chain) -> int:
     """Transactions the relayer key has sent (a pre-flight failure must not add one)."""
-    return int(c.w3.eth.get_transaction_count(_relayer(h)))
+    return int(c.w3.eth.get_transaction_count(Web3.to_checksum_address(_relayer(h))))
 
 
 def _relayer(h: Harness) -> str:
@@ -158,7 +158,7 @@ async def test_expired_orders_never_match_and_an_order_expiring_before_submit_co
         nonce = relayer_nonce(h, c)
         await bundle.relayer.run_once()
         (st,) = await settlements(h)
-        assert st.status == SettlementStatus.FAILED and st.failure_reason.startswith(
+        assert st.status == SettlementStatus.FAILED and (st.failure_reason or "").startswith(
             "preflight:expired"
         )
         assert relayer_nonce(h, c) == nonce  # no transaction was sent
@@ -246,14 +246,16 @@ async def test_preflight_cancels_an_unfunded_order_and_returns_the_counterparty(
     make_settings: SettingsFactory, chain: dict[str, str], web3_sync: Web3
 ) -> None:
     async with stack(make_settings, chain, web3_sync) as (h, c):
-        seller, buyer, sell, buy = await pair(h, c)
+        _seller, buyer, sell, buy = await pair(h, c)
         bundle = build(h)
         await bundle.matcher.run_once()
         c.send(c.usdc.functions.approve(c.exchange.address, 0), buyer.key)  # buyer pulls funds
         nonce = relayer_nonce(h, c)
         await bundle.relayer.run_once()
         (st,) = await settlements(h)
-        assert st.status == SettlementStatus.FAILED and "unfunded:allowance" in st.failure_reason
+        assert st.status == SettlementStatus.FAILED and "unfunded:allowance" in (
+            st.failure_reason or ""
+        )
         assert relayer_nonce(h, c) == nonce
         b = await order_row(h, buy)
         assert b.status == OrderStatus.CANCELLED and b.cancel_reason == "unfunded:allowance"
@@ -311,7 +313,9 @@ async def test_on_chain_cancel_before_broadcast_is_caught_without_spending_gas(
         nonce = relayer_nonce(h, c)
         await bundle.relayer.run_once()
         (st,) = await settlements(h)
-        assert st.status == SettlementStatus.FAILED and st.failure_reason.startswith("cancel_race")
+        assert st.status == SettlementStatus.FAILED and (st.failure_reason or "").startswith(
+            "cancel_race"
+        )
         assert relayer_nonce(h, c) == nonce
         s = await order_row(h, body["_hash"])
         assert (s.status, s.cancel_type) == (OrderStatus.CANCELLED, "onchain")
@@ -349,7 +353,9 @@ async def test_on_chain_cancel_after_broadcast_fails_the_settlement_and_is_never
             await bundle.matcher.run_once()
         (st,) = await settlements(h)
         assert len(await settlements(h)) == 1  # no second attempt, no re-match
-        assert st.status == SettlementStatus.FAILED and st.failure_reason.startswith("cancel_race")
+        assert st.status == SettlementStatus.FAILED and (st.failure_reason or "").startswith(
+            "cancel_race"
+        )
         assert st.attempts == 0 and len(st.tx_hashes) == 1
         s = await order_row(h, body["_hash"])
         assert (s.status, s.cancel_type) == (OrderStatus.CANCELLED, "onchain")
@@ -377,7 +383,9 @@ async def test_listener_seeing_the_cancel_first_fails_the_inflight_settlement(
             c.mine()
         await bundle.listener.run_once()  # OrderCancelled applied FIRST
         (st,) = await settlements(h)
-        assert st.status == SettlementStatus.FAILED and st.failure_reason.startswith("cancel_race")
+        assert st.status == SettlementStatus.FAILED and (st.failure_reason or "").startswith(
+            "cancel_race"
+        )
         await bundle.relayer.run_once()  # sees a failed settlement: nothing to do, no retry
         assert (await settlements(h))[0].attempts == 0
         assert (await order_row(h, buy)).status == OrderStatus.OPEN
@@ -409,13 +417,13 @@ async def test_a_stuck_settle_is_replaced_at_the_same_nonce_with_a_fresh_quote(
     make_settings: SettingsFactory, chain: dict[str, str], web3_sync: Web3
 ) -> None:
     async with stack(make_settings, chain, web3_sync, settle_bump_after_seconds=0.05) as (h, c):
-        seller, buyer, sell, buy = await pair(h, c)
+        _seller, buyer, sell, _buy = await pair(h, c)
         bundle = build(h)
         with no_automine(c):
             await bundle.matcher.run_once()
             await bundle.relayer.run_once()
             (st,) = await settlements(h)
-            first = (st.tx_hash, st.tx_nonce, st.quote_timestamp, int(st.quote_price))
+            first = (st.tx_hash, st.tx_nonce, st.quote_timestamp or 0, int(st.quote_price or 0))
             await post_quote(h, c, 152_000)  # the engine publishes a newer quote; tx still pending
             await asyncio.sleep(0.1)
             cycle = await bundle.relayer.run_once()
@@ -423,12 +431,14 @@ async def test_a_stuck_settle_is_replaced_at_the_same_nonce_with_a_fresh_quote(
             (st,) = await settlements(h)
             assert st.tx_nonce == first[1] and len(st.tx_hashes) == 2  # same nonce, new tx
             assert st.tx_hash != first[0]
-            assert st.quote_timestamp >= first[2] and int(st.quote_price) == 152_000  # fresh quote
+            assert (st.quote_timestamp or 0) >= first[2] and int(
+                st.quote_price or 0
+            ) == 152_000  # fresh quote
             c.mine()
         await bundle.listener.run_once()
         (st,) = await settlements(h)
         (tr,) = await trades(h)
-        assert st.status == SettlementStatus.CONFIRMED and tr.tx_hash in st.tx_hashes
+        assert st.status == SettlementStatus.CONFIRMED and (tr.tx_hash or "") in st.tx_hashes
         assert int(tr.exec_price) == 152_000  # the price was re-derived from the fresh quote
         # exactly one fill happened on-chain
         assert c.exchange.functions.filled(sell).call() == 1_000
@@ -439,7 +449,7 @@ async def test_a_quote_that_goes_stale_while_the_tx_waits_is_requoted_not_failed
     make_settings: SettingsFactory, chain: dict[str, str], web3_sync: Web3
 ) -> None:
     async with stack(make_settings, chain, web3_sync) as (h, c):
-        seller, buyer, sell, buy = await pair(h, c)
+        _seller, buyer, _sell, buy = await pair(h, c)
         bundle = build(h)
         with no_automine(c):
             await bundle.matcher.run_once()
@@ -453,7 +463,7 @@ async def test_a_quote_that_goes_stale_while_the_tx_waits_is_requoted_not_failed
         await bundle.relayer.run_once()
         (st,) = await settlements(h)
         assert st.status == SettlementStatus.MATCHED and st.attempts == 1  # re-queued, not failed
-        assert st.failure_reason.startswith("retry:StaleQuote")
+        assert (st.failure_reason or "").startswith("retry:StaleQuote")
         assert (await order_row(h, buy)).status == OrderStatus.OPEN  # nobody lost their order
         await post_quote(h, c, QUOTE)  # the engine keeps quoting
         await asyncio.sleep(0.3)  # retry backoff
@@ -468,7 +478,7 @@ async def test_a_price_move_that_makes_a_pair_unsettleable_does_not_cause_a_rema
     make_settings: SettingsFactory, chain: dict[str, str], web3_sync: Web3
 ) -> None:
     async with stack(make_settings, chain, web3_sync) as (h, c):
-        seller, buyer, sell, buy = await pair(h, c)
+        _seller, _buyer, sell, buy = await pair(h, c)
         bundle = build(h)
         await bundle.matcher.run_once()  # matched at 150k
         # the market moves: 200k is outside [140k, 160k] AND its band, so no price fits any more
