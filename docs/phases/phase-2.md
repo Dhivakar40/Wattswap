@@ -2,7 +2,11 @@
 
 Branch: `phase-2-backend-core` · Target tag: `v0.2.0` (after approval)
 
-Status: **PLAN — awaiting "go".**
+Status: **IMPLEMENTED — awaiting PR approval.** Owner decisions on the plan are recorded under *Decisions* (overrides marked).
+
+## Outcome
+
+See *What was built*, *How to verify* and *Known limitations* at the end of this file.
 
 ## Starting state
 
@@ -128,26 +132,65 @@ New Python deps — api: `PyJWT`, `siwe`, `eth-account` (comes via web3), `struc
 | Open-Meteo unavailable/rate-limited | sim falls back to labeled clear-sky model; tests never hit the network |
 | Windows/Git Bash friction (Makefile, docker) | all commands run via `make` in Git Bash as in Phase 1; integration test self-skips with a clear message if stack is down |
 
-## Decisions I'm proposing (override any with your "go")
+## Decisions (owner-confirmed)
 
-1. **Registrar key:** the API holds a `REGISTRAR_PRIVATE_KEY` (Anvil account #4, public dev key) and registers meters on-chain on the user's behalf; `deploy-local` will grant `REGISTRAR_ROLE` to it. Production note: KMS/HSM + admin approval flow. Alternative: user-submitted registration tx — rejected, since only `REGISTRAR_ROLE` may register.
-2. **Device key ownership:** the *device* generates its key; the user supplies only the address. The API never sees device private keys.
-3. **Contract gap to document, not fix:** the contract dedupes on `readingId` only. A compromised device key could sign overlapping intervals with different ids. The API blocks this off-chain (`UNIQUE(meter_id, interval_start)` + overlap check), but the oracle key bypassing the API could not be stopped on-chain. I'll record this in the threat model rather than change Phase 1 contracts, unless you want an on-chain per-meter `lastIntervalEnd` check (a small, contained contract change + tests).
-4. **JWT:** 30-min lifetime, re-login via SIWE (no refresh tokens in v1).
-5. **Admin:** env allow-list `ADMIN_ADDRESSES`, no on-chain role mirroring yet.
-6. **Reading interval default:** 15 min (900 s), as in the shared test vector.
-7. **Quality bar for tests:** integration test is a hard CI gate for this phase.
+1. **Registrar key**: the API holds `REGISTRAR_PRIVATE_KEY` (Anvil #4), granted `REGISTRAR_ROLE` by `deploy-local`. **Added by the owner:** it must be a distinct address from the oracle/relayer/pricer keys; the API refuses to boot if any two role keys share an address.
+2. **Device keys**: the device generates its own key, the user supplies only the address; the API never sees device private keys.
+3. **OVERRIDE, interval ordering fixed on-chain.** `MeterRegistry.lastIntervalEnd[meter]`; `EnergyToken.mint` calls the new `RECORDER_ROLE`-gated `recordReading(meterId, amountWh, intervalStart, intervalSeconds)`, which requires `intervalStart >= lastIntervalEnd` and a positive-length interval, then advances the cursor. Readings are minted in order; offline devices backfill oldest-first. Unit + fuzz + invariant tests added; ABIs and vectors regenerated; coverage stays at 100% lines. ADR-003 and the threat model updated. These were the first commits of the phase.
+4. **OVERRIDE, JWT lifetime 12 h**, `HttpOnly; Secure; SameSite=Lax`, explicit logout that revokes the token through a Redis denylist. `ADMIN_ADDRESSES` allow-list approved.
+5. **Interval 900 s default, configurable** (`READING_INTERVAL_SECONDS`), and the **simulator has a DEMO mode** with time acceleration (default one simulated interval per 20 real seconds, logged as `ACCELERATED DEMO MODE`). **Plausibility uses each reading's own interval length** in the API, simulator and contract, never a hardcoded 900.
+6. **The end-to-end Anvil test is the CI gate and runs in demo mode.**
 
 ## Acceptance criteria
 
-- [ ] `alembic upgrade head` creates all 8 tables; downgrade/upgrade round-trips; no drift.
-- [ ] SIWE login sets an httpOnly JWT cookie; replayed nonce rejected.
-- [ ] Meter registered via API appears in `MeterRegistry` on Anvil.
-- [ ] Simulator readings (EIP-712) are verified, stored once, and minted: `WATT` balance == Σ Wh; replays are no-ops.
-- [ ] Failure paths covered (bad sig, implausible, inactive meter, rotated key, crash recovery).
-- [ ] `ruff`, `mypy --strict`, unit + integration pytest green locally and in CI; `/docs`, `/ready`, `/metrics` work.
-- [ ] README, `docs/api.md`, architecture + threat-model updates, ADRs 005/006, phase doc "what was built / how to verify / limitations" completed.
+- [x] `alembic upgrade head` creates all 8 tables; downgrade/upgrade round-trips; no drift.
+- [x] SIWE login sets an httpOnly JWT cookie; replayed nonce rejected.
+- [x] Meter registered via API appears in `MeterRegistry` on Anvil.
+- [x] Simulator readings (EIP-712) are verified, stored once, and minted: `WATT` balance == Σ Wh; replays are no-ops.
+- [x] Failure paths covered (bad sig, implausible, inactive meter, rotated key, crash recovery).
+- [x] `ruff`, `mypy --strict`, unit + integration pytest green locally and in CI; `/docs`, `/ready`, `/metrics` work.
+- [x] README, `docs/api.md`, architecture + threat-model updates, ADRs 005/006, phase doc "what was built / how to verify / limitations" completed.
 
 ## Commit plan (Conventional Commits, small)
 
 `docs: phase 2 plan` → `feat(api): core infra (config, errors, logging, db, redis, ratelimit)` → `feat(api): models and initial migration` → `feat(api): siwe auth and jwt cookie` → `feat(api): chain client and eip-712 helpers` → `feat(meter-sim): solar model, weather, signing` → `feat(api): meter registry endpoints` → `feat(api): reading ingest and mint worker` → `feat(meter-sim): cli and service` → `test(api): end-to-end anvil integration` → `ci: api integration job` → `docs: api, adrs, threat model, phase 2 outcome`.
+
+## What was built
+
+- **Contracts** (first commits): ordered, non-overlapping intervals per meter; `recordReading`; `RECORDER_ROLE` wiring in `Deploy.s.sol`; reentrancy-friendly `mint` ordering (Slither clean). 112 Foundry tests, 100% line coverage (215/215).
+- **API** (`services/api`): settings with role-key separation check; error envelope, request ids, JSON logs, Prometheus metrics, Redis rate limits, CORS allow-list; async SQLAlchemy models for all eight tables and an Alembic migration (up/down/up and drift-free); SIWE login with EIP-1271, 12 h JWT cookie and Redis-denylist logout; meter registry endpoints that register on-chain with the registrar key (plus label, activate/deactivate and device-key rotation); device-signed `POST /readings` ingest; the mint worker with persist-before-broadcast, adoption, fee-bump replacement, decoded reverts and leader lock; `/ready` verifying real on-chain role wiring.
+- **Meter simulator** (`services/meter-sim`): labeled SIMULATOR behind a `MeterDevice` protocol; NOAA solar geometry + Haurwitz clear-sky + Open-Meteo irradiance/temperature (validated, retried, with a reported clear-sky fallback) + PV model (PR 0.8, temperature derate) + seeded noise; EIP-712 signing verified against the Foundry-generated shared vector; real-time and accelerated demo runner; `keygen`, dev-only `provision`, and `run` CLI; Docker image and compose profile.
+- **Shared**: plain JSON ABIs (`packages/shared/src/abis/json`) for non-TypeScript consumers.
+- **Infra/CI**: API image now builds from the repo root; `make migrate | sim | sim-provision | test-integration`; CI api job installs Foundry, requires services (`REQUIRE_SERVICES=1`) and runs the end-to-end gate as its own step.
+- **Docs**: `docs/api.md`, ADR-005 (mint pipeline), ADR-006 (auth and key separation), architecture, threat model (B-1..B-14), README.
+
+## Deviations from the plan
+
+- Rotated-key coverage needed an API surface, so `PATCH /meters/{id}` also accepts `device_signer` (owner-initiated rotation, registrar-signed).
+- The integration suite has three tests (full pipeline in demo mode, night intervals, and the same pipeline over real HTTP via uvicorn) rather than one.
+- `readings.reading_id` is enforced to be the derived id (stricter than the contract), recorded in ADR-005 and `docs/api.md`.
+- API unit/API-level test directories were reorganised into `tests/{unit,api,integration}`.
+
+## How to verify
+
+```bash
+make lint                      # contracts fmt, ruff, mypy --strict, eslint, tsc, prettier: all clean
+make test-contracts-ci         # 112 tests with the heavy fuzz/invariant profile
+make coverage-contracts        # 100% lines (gate raised from 95%)
+make slither                   # no high/medium
+make up && make test-api       # needs postgres + redis (the compose stack); spawns its own Anvil
+make test-integration          # only the end-to-end gate; FAILS (does not skip) if a service is down
+make deploy-local && make sim  # live demo against the Docker stack; watch WATT arrive for account #5
+```
+
+## Known limitations / tech debt
+
+- Role keys are plain environment variables (KMS/HSM in production).
+- Only EOA device signatures are verified at ingest; EIP-1271 device wallets work on-chain but would be rejected by the API.
+- Mint throughput is one tx per confirmation round per oracle key (fine for 15-minute readings).
+- A permanently failed reading becomes an unfillable gap by design (the contract cannot go backwards).
+- `AdminDep` and the admin allow-list are wired and the role is exercised, but no admin-only endpoint exists until Phase 6.
+- `ORDERS/TRADES/PRICE_TICKS/SETTLEMENTS` are schema only; no endpoints.
+- Accelerated demo mode is catch-up pacing against real chain time, not chain time travel, so it only replays the past (it stops accelerating once it reaches the present).
+- Open-Meteo is not called in tests (the simulator's fallback is exercised instead); the live call was run manually against the real API.
+

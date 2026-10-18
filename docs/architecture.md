@@ -34,16 +34,16 @@ The same flow as text:
 3. `[Next.js + wallet]` → EIP-712 signed orders → `[FastAPI: Order Book + Matcher]`
 4. `[Matcher]` → matched pair → `[Settlement Relayer]` → tx → `[WattSwapExchange.settle()]` → events → `[Chain Listener]` → DB + WS
 
-## Components (Phase 0 status)
+## Components (status after Phase 2)
 
 | Component | Location | Phase 0 | Lands in |
 |---|---|---|---|
-| Smart contracts | `contracts/` | Foundry project + smoke test | Phase 1 |
-| API | `services/api/` | `/health`, `/ready`, `/metrics`, request IDs, JSON logs, Alembic initialised | Phases 2-5 |
-| Meter simulator | `services/meter-sim/` | CLI stub (`--help` only) | Phase 2 |
+| Smart contracts | `contracts/` | Five contracts, 100% line coverage; per-meter ordered intervals (ADR-003) | done (Phase 1) |
+| API | `services/api/` | SIWE auth, meter registry, reading ingest, mint worker, 8-table schema, error envelope, rate limits, `/ready`, `/metrics` | Phase 2 done; pricing/matching/WS in 3-5 |
+| Meter simulator | `services/meter-sim/` | Solar model, Open-Meteo, EIP-712 signing, accelerated demo mode (labeled SIMULATOR) | done (Phase 2) |
 | Web | `apps/web/` | Next.js 15, Tailwind tokens (dark default), shadcn base, health status page | Phase 6 |
 | Shared package | `packages/shared/` | Chain ids + empty address book | Phase 1 (ABIs) / 8 (Sepolia) |
-| Infra | `docker-compose.yml` | postgres 16, redis 7, anvil, api, web | meter-sim in Phase 2 |
+| Infra | `docker-compose.yml` | postgres 16, redis 7, anvil, api, web; `meter-sim` behind the `sim` profile | done |
 
 ## Local stack
 
@@ -55,3 +55,19 @@ browser :3000 ──► web (Next.js) ──► api :8000 ──► postgres :54
 
 Dev keys in `.env.example` are the public Anvil defaults. Production would hold relayer/oracle/pricer keys in a
 KMS/HSM.
+
+## Meter-to-mint pipeline (Phase 2)
+
+```
+meter-sim (SIMULATED) --POST /api/v1/readings, EIP-712 signed by the device key--> API ingest
+   verify: meter active, derived reading_id, device signature, interval bounds, plausibility
+           for THIS reading's interval, ordering (DB + on-chain lastIntervalEnd)
+   store: readings + mints(pending)    (idempotent: UNIQUE reading_id, per-meter row lock)
+mint worker (one leader, Redis lock)
+   simulate -> sign -> persist (hash, raw tx) -> broadcast -> wait N confirmations
+   -> EnergyToken.mint (oracle key) -> MeterRegistry.recordReading (ordering + plausibility)
+   -> ReadingMinted event -> mints.status = confirmed
+```
+
+See [ADR-005](adr/005-mint-pipeline-idempotency.md), [ADR-006](adr/006-auth-siwe-jwt-key-separation.md) and
+[api.md](api.md).

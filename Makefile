@@ -75,7 +75,10 @@ sim-provision: ## DEV ONLY: register a demo (simulated) meter via the API; write
 	@mkdir -p $(SIM_DIR)
 	@test -f $(SIM_DIR)/device.key || (cd services/meter-sim && uv run python -m meter_sim keygen --out runtime/device.key)
 	cd services/meter-sim && OWNER_PRIVATE_KEY=$(OWNER_PRIVATE_KEY) uv run python -m meter_sim provision 	  --api http://localhost:$${API_PORT:-8000} --device-key runtime/device.key --config runtime/meters.json
-sim: sim-provision ## Run the SIMULATED meter in accelerated DEMO mode (1 interval / 20 s real time)
+$(SIM_DIR)/meters.json:
+	@$(MAKE) --no-print-directory sim-provision
+sim: $(SIM_DIR)/meters.json ## Run the SIMULATED meter in accelerated DEMO mode (1 interval / 20 s); provisions once
+
 	cd services/meter-sim && uv run python -m meter_sim run --api http://localhost:$${API_PORT:-8000} 	  --config runtime/meters.json --demo --demo-seconds 20
 
 up: env ## Build and start postgres, redis, anvil, api, web

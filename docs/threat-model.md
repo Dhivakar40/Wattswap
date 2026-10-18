@@ -59,6 +59,29 @@ excluded). Result: **no High or Medium findings remain.** Findings that were rai
 Not covered by Slither and therefore reviewed manually: EIP-712 type strings (cross-checked against viem in
 `packages/shared/src/vectors.test.ts`), and role wiring in the deploy script (`Deploy.t.sol`).
 
+## Backend and meter pipeline (Phase 2)
+
+| # | Threat | Mitigation | Evidence |
+|---|---|---|---|
+| B-1 | Login replay / forged SIWE message | Single-use Redis nonce consumed before verification; domain, chain id, `issued_at` window and `expiration_time` enforced | `test_auth.py` (nonce, domain, chain, expiry, stale/future issued-at) |
+| B-2 | Stolen session cookie | `HttpOnly; Secure; SameSite=Lax`; 12 h lifetime; logout revokes the `jti` via a Redis denylist | `test_logout_revokes_the_token_server_side` |
+| B-3 | JWT forgery (`alg=none`, algorithm swap, wrong secret, tampering) | Algorithm pinned to HS256; `iss/sub/jti/iat/exp` required | `test_tampered_expired_and_wrong_secret_tokens_rejected`, `test_token_rejections` |
+| B-4 | Weak JWT secret in production | Process refuses to start without a random secret of 32+ characters | `test_production_requires_a_strong_jwt_secret` |
+| B-5 | One compromised key does everything | Distinct oracle/registrar/relayer/pricer keys; boot fails if any two share an address; `/ready` checks real on-chain roles | `test_any_two_role_keys_sharing_an_address_refuses_to_boot` |
+| B-6 | Forged readings | EIP-712 device signature checked at ingest (and again by the contract); `reading_id` must be the derived id | `test_signature_failures`, `test_input_validation` |
+| B-7 | Reading replay / duplicate mints | `FOR UPDATE` per-meter lock, DB unique constraints, `readingMinted` pre-check, contract replay guard | `test_concurrent_duplicates_*`, integration replay step |
+| B-8 | Over-reporting energy | Plausibility ceiling from the reading's *own* interval length, mirrored from the registry; contract re-checks; `lastIntervalEnd` blocks overlap | `test_plausibility_uses_the_readings_own_interval_length`, ADR-003 |
+| B-9 | Reading someone else's meters / history | Ownership enforced on every route; foreign ids return 404 | `test_owners_are_isolated_and_admin_sees_all` |
+| B-10 | Crash or restart causes double mint or lost mint | Persist-before-broadcast, re-broadcast of the same signed tx, adoption of on-chain mints, fee-bump replacement (ADR-005) | `test_mint_worker.py` |
+| B-11 | Two API instances race on the oracle key | Redis leader lock for the worker plus a per-key nonce lock | `test_two_workers_never_double_mint` |
+| B-12 | Untrusted weather data poisons the simulator | Open-Meteo responses validated (shape, finite, range); failures fall back to clear-sky and are reported | `test_parse_accepts_valid_and_rejects_garbage` |
+| B-13 | Abuse / flooding | Redis rate limits per IP, user, auth endpoint and meter | `test_auth_endpoints_are_rate_limited`, `test_per_meter_rate_limit` |
+| B-14 | Information leakage in errors | One error envelope; unhandled errors return a generic 500 and are logged with the request id | `test_error_envelope_*` |
+
+Residual risks for this phase: the dev role keys are plain environment variables (production would use a KMS/HSM);
+EIP-1271 device wallets are verified on-chain but not at ingest; the simulator signs whatever its model says, which
+is by design for a labeled demo.
+
 ## Known limitations / out of scope for Phase 1
 
 - No third-party audit. Do not deploy with real value.
