@@ -2,7 +2,7 @@
 
 Branch: `phase-3-pricing` · Target tag: `v0.3.0` (after approval)
 
-Status: **PLAN — awaiting "go".** Items marked **DECISION** are defaults I will use unless you override them.
+Status: **IMPLEMENTED — awaiting PR approval.** Items marked **DECISION** were proposed defaults; the owner's changes are recorded under *Owner changes*.
 
 ## Starting state (facts that shape the design)
 
@@ -155,16 +155,65 @@ New dependencies: `respx` and `hypothesis` (dev). No new runtime dependency (htt
 
 ## Acceptance criteria
 
-- [ ] Every model formula has a hand-computed unit test; clamp/EMA/rate-limit/breaker behaviour is tested; properties hold.
-- [ ] Open-Meteo is mocked with respx for normal, timeout, 429, 5xx, malformed and stale-data cases; the breaker trips and recovers.
-- [ ] Supply is read from registered meters and per-cell weather; adding a meter changes the next tick.
-- [ ] Quotes are signed over integer mUSDC/kWh, reproduce the shared vectors, verify via `hashQuote`/`PRICER_ROLE`, and settle on Anvil.
-- [ ] Ticks are persisted, published to Redis with `seq`, and visible in logs; the oracle is updated on threshold/heartbeat.
-- [ ] Admin config endpoints work, are audited and role-gated.
-- [ ] Demo mode moves prices while the simulator is accelerated.
-- [ ] Backtest CLI runs and is deterministic.
-- [ ] `docs/pricing-model.md` has formulas, a parameter table and a worked example; ADR-007 written; CI green.
+- [x] Every model formula has a hand-computed unit test; clamp/EMA/rate-limit/breaker behaviour is tested; properties hold.
+- [x] Open-Meteo is mocked with respx for normal, timeout, 429, 5xx, malformed and stale-data cases; the breaker trips and recovers.
+- [x] Supply is read from registered meters and per-cell weather; adding a meter changes the next tick.
+- [x] Quotes are signed over integer mUSDC/kWh, reproduce the shared vectors, verify via `hashQuote`/`PRICER_ROLE`, and settle on Anvil.
+- [x] Ticks are persisted, published to Redis with `seq`, and visible in logs; the oracle is updated on threshold/heartbeat.
+- [x] Admin config endpoints work, are audited and role-gated.
+- [x] Demo mode moves prices while the simulator is accelerated.
+- [x] Backtest CLI runs and is deterministic.
+- [x] `docs/pricing-model.md` has formulas, a parameter table and a worked example; ADR-007 written; CI green.
 
 ## Commit plan
 
 `docs: phase 3 plan` → `test(contracts): extra PriceQuote vectors` → `feat(pricing): pure model, smoothing, breaker, volatility` → `feat(pricing): engine step and params` → `feat(pricing): open-meteo provider and regions` → `feat(api): pricing schema migration` → `feat(pricing): ticker, quotes, redis, oracle pusher` → `feat(api): market and admin pricing endpoints` → `feat(pricing): backtest cli` → `test: pricing integration on anvil` → `docs: pricing model, ADR-007, api, phase 3 outcome` → `ci: …`.
+
+## Owner changes to the plan (all implemented)
+
+1. **Supply is not generation-only.** `S = w_gen·Gen + w_inv·I` with `w_gen = 1.0`, `w_inv = 0.5`; inventory is open sell volume once the book exists, until then the WATT held by the owners of active meters (read from the chain). A floor `S_min = max(0.1 kW, 10 % of installed)` keeps `D/S` finite. Night with no sun gives an inventory-driven price (146 599 with 24 kWh held; 222 203 with nothing held), never the ceiling.
+2. **Limiter and breaker are consistent, and the breaker watches the RAW price.** Max step 0.25 %/tick; the limiter alone moves the applied price at most 10.50 % up / 9.53 % down per 10-minute window, below the 15 % trigger, and `cross_check()` enforces that for every parameter set (and refuses to boot at an inconsistent tick rate). Stale weather (30 min) freezes; a raw move > 15 % in 10 min only widens the `band_bps` hint (capped at the on-chain band) and logs an anomaly event. The state machine and transition table are in `docs/pricing-model.md`.
+3. **Full-day trace** (midnight, sunrise, noon, sudden cloud, anomaly clearing, sunset, plus a weather-outage variant) with raw price, EMA, applied price, limiter and breaker at each point, in the doc and in tests; a test fails if the doc table differs from the engine.
+4. **Price drivers on every tick**: supply term, demand term, weather inputs per cell, clamps, breaker state, band, and a demand/supply/generation/inventory attribution of the change, stored in `price_ticks.drivers` (JSONB) and sent on the Redis feed and `/price`.
+5. **Standalone entry point**: `python -m app.pricing.run` (`make pricing`, compose profile `pricing`), same code and leader lock as the embedded engine.
+
+Previously approved deviations, as built: the exchange (not the oracle) verifies quotes; the single-price `PriceOracle` follows the primary market only (ADR-007); extra `PriceQuote` vectors instead of a duplicate; `band_bps` is a capped hint; two clocks for the demo.
+
+## What was built
+
+- **Pure core** (`app/pricing/{params,model,smoothing,breaker,engine,region,trace}.py`): Decimal arithmetic, integer prices, deterministic `step`, restart from persisted ticks, 24-hour forecast function.
+- **Edges**: Open-Meteo provider (`weather.py`: one batched request per poll, strict validation, `Retry-After`, backoff with jitter, last-good fallback with real age, cached history days); repository; EIP-712 quote signing; Redis publisher; leader-locked service (initial weather poll, ticker, oracle pusher); chain-anchored quote clock.
+- **API**: public `/markets`, `/price`, `/ticks`, `/forecast`; admin config (validated, audited, layered), state, breaker reset, events, market definition. Migration `0002` (`markets`, `pricing_params`, `pricing_param_changes`, `pricing_events`, reshaped `price_ticks`).
+- **Backtest CLI** (`app.pricing.backtest`): same engine, deterministic CSV and summary.
+- **Contracts/shared**: edge-case `PriceQuote` vectors generated by Foundry; contract coverage stays at 100 %.
+- **Docs**: `docs/pricing-model.md`, ADR-007, API reference, threat model (P-1..P-11), architecture, README.
+
+## How to verify
+
+```bash
+make lint                                  # everything clean
+make test-contracts-ci coverage-contracts  # 112 tests, 100 % lines (vectors regenerated)
+make up && make test-api                   # 303 API tests incl. respx-mocked Open-Meteo, Anvil settlement, standalone process
+make test-integration                      # includes the accelerated-demo pricing gate
+uv run python -m app.pricing.trace         # the day-trace table in the docs
+make backtest ARGS="--lat 13.0827 --lon 80.2707 --from 2026-06-01 --to 2026-06-07"
+make up && make deploy-local && make sim-provision   # then: curl localhost:8000/api/v1/markets/<id>/price
+```
+
+## Findings during the build (all fixed or documented)
+
+- **Demand and generation both scale with installed capacity**, so with no inventory, registering meters raises supply but not the raw price. Kept as the approved model, documented, and added an optional `base_demand_kw` (default 0) so consumer demand that does not scale with PV can be modelled; tests cover both.
+- **A start-up race** (the weather poller and the ticker both created the default market) would have crashed an iteration on a fresh database; `ensure_default_market` is now an idempotent upsert with a 12-way concurrency test.
+- **A 1 s tick would have broken the limiter/breaker rule**, found when running the engine as a separate process; the service now refuses to boot at such a tick rate.
+- **Western longitudes produced a negative local hour** (Decimal `%` keeps the dividend's sign); caught by a hand-computed test and fixed.
+- **Cold start**: ticking before the first weather poll froze every restart for the recovery hysteresis; the service now polls once before it starts ticking.
+
+## Known limitations / tech debt
+
+- Demand is a model; bids and fills are 0 until Phase 4. Before the order book exists, "tradeable inventory" is the WATT *held* by active meters' owners, including WATT they may not intend to sell.
+- `PriceOracle` holds one price; only the primary market is pushed on-chain.
+- The engine cannot change the on-chain band, only publish a capped hint.
+- The backtest's inventory is a simple ledger (no order book in a replay) and runs at about 1 000 ticks/second.
+- Quote and oracle timestamps assume a chain that produces blocks; on an idle dev chain the wall clock is used.
+- The embedded engine runs in the API process; moving it to its own container only needs the `pricing` compose profile and `PRICING_EMBEDDED=false`.
+

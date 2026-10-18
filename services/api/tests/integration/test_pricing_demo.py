@@ -26,6 +26,7 @@ from meter_sim.weather import NoWeather
 
 from app.models import MintStatus
 from app.pricing import publish
+from app.pricing.engine import Tick
 from app.pricing.repo import DEFAULT_MARKET_ID
 from app.pricing.trace import CLEAR_SKY_GHI
 from tests.api.pricing_helpers import FORECAST, FakeClock, make_service
@@ -117,7 +118,7 @@ async def test_prices_move_while_the_simulator_runs_accelerated(
             assert stats.posted == intervals and stats.rejected == 0
 
         # --- the engine ticks while it runs (one tick per 15 s of fake wall time) ---------------
-        ticks = []
+        ticks: list[Tick] = []
 
         async def engine() -> None:
             while (len(ticks) < 60 and not sim_task.done()) or len(ticks) < 4:

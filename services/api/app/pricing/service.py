@@ -469,7 +469,12 @@ class PricingService:
         return "pushed"
 
     # ------------------------------------------------------------------ loops
-    async def _every(self, seconds: float, stop: asyncio.Event, fn: Callable[[], Any]) -> None:
+    async def _every(
+        self, seconds: float, stop: asyncio.Event, fn: Callable[[], Any], *, immediate: bool = True
+    ) -> None:
+        if not immediate:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), seconds)
         while not stop.is_set():
             started = time.monotonic()
             try:
@@ -493,10 +498,21 @@ class PricingService:
                         leader = bool(await lock.acquire(blocking=False))
                         if leader:
                             log.info("pricing service became leader")
+                            # Fetch weather BEFORE the first tick, so a restart does not begin frozen
+                            # with "no weather" and then sit out the recovery hysteresis.
+                            try:
+                                await asyncio.wait_for(self.poll_weather_once(), timeout=30)
+                            except Exception:
+                                log.exception(
+                                    "initial weather poll failed; ticking on last-good/none"
+                                )
                             tasks = [
                                 asyncio.create_task(
                                     self._every(
-                                        cfg.weather_poll_seconds, stop, self.poll_weather_once
+                                        cfg.weather_poll_seconds,
+                                        stop,
+                                        self.poll_weather_once,
+                                        immediate=False,  # the initial poll above already ran
                                     ),
                                     name="weather",
                                 ),

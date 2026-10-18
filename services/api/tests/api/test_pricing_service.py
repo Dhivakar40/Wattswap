@@ -581,3 +581,28 @@ async def test_concurrent_start_up_creates_the_default_market_exactly_once(
         assert set(ids) == {MID}
         async with h.app.state.sessionmaker() as s:
             assert await s.scalar(select(func.count()).select_from(Market)) == 1
+
+
+@respx.mock
+async def test_a_starting_service_polls_weather_before_its_first_tick(
+    make_settings: SettingsFactory,
+) -> None:
+    """Otherwise every restart would begin FROZEN ('no weather') and sit out the hysteresis."""
+    async with Harness(make_settings(pricing_tick_seconds=15)) as h:
+        clock = FakeClock()
+        route = mock_weather(clock)
+        await owner_with_meter(h)
+        svc = make_service(h, clock)
+        stop = asyncio.Event()
+        task = asyncio.create_task(svc.run(stop))
+        try:
+            for _ in range(80):
+                await asyncio.sleep(0.25)
+                if await rows(h):
+                    break
+        finally:
+            stop.set()
+            await task
+        [first, *_] = await rows(h)
+        assert first.breaker_state == "NORMAL" and first.drivers["weather"][0]["source"] == "live"
+        assert route.call_count == 1  # exactly one poll so far: the initial one, not a duplicate
