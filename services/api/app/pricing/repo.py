@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import Any
 
 from eth_utils import keccak
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -136,9 +136,14 @@ async def follow_market_time(
 
 # -------------------------------------------------------------------- order book inputs
 async def open_order_wh(session: AsyncSession, market_id: str, side: OrderSide, now_ts: int) -> int:
-    """Unfilled Wh of open, unexpired orders on one side of the book (0 until Phase 4)."""
+    """Unfilled Wh of open, unexpired orders on one side of the book.
+
+    A cancel-pending order only counts its in-flight part: the rest has already left the book."""
+    open_wh = case(
+        (Order.cancel_pending.is_(True), Order.reserved_wh), else_=Order.amount_wh - Order.filled_wh
+    )
     total = await session.scalar(
-        select(func.coalesce(func.sum(Order.amount_wh - Order.filled_wh), 0)).where(
+        select(func.coalesce(func.sum(open_wh), 0)).where(
             Order.market_id == market_id,
             Order.side == side,
             Order.status.in_([OrderStatus.OPEN, OrderStatus.PARTIALLY_FILLED]),
@@ -149,16 +154,18 @@ async def open_order_wh(session: AsyncSession, market_id: str, side: OrderSide, 
 
 
 async def recent_fill_wh(session: AsyncSession, market_id: str, since: datetime) -> int:
-    """Wh traded in this market since `since` (0 until Phase 4)."""
+    """Wh actually traded in this market since `since`: only fills that are CONFIRMED on-chain
+    (a matched-then-failed trade never moved any energy, so it is not fill velocity)."""
     total = await session.scalar(
-        select(func.coalesce(func.sum(Trade.fill_wh), 0))
-        .join(Order, Order.id == Trade.buy_order_id)
-        .where(Order.market_id == market_id, Trade.created_at >= since)
+        select(func.coalesce(func.sum(Trade.fill_wh), 0)).where(
+            Trade.market_id == market_id,
+            Trade.executed_at.is_not(None),
+            Trade.executed_at >= since,
+        )
     )
     return int(total or 0)
 
 
-# ------------------------------------------------------------------------- parameters
 async def stored_overrides(session: AsyncSession, market_id: str) -> dict[str, Any]:
     """Global overrides, then this market's, later ones winning."""
     rows = await session.scalars(

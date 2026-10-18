@@ -363,6 +363,8 @@ class Relayer:
                 await s.commit()
                 return
             info = await self.sender.revert_reason(h)
+            if info is None:
+                info = await self._infer_revert(st, int(receipt["blockNumber"]))
             await self._apply_revert(s, st, buy, sell, info, out, mined=True)
             await s.commit()
             cycle.failed += 1
@@ -407,6 +409,18 @@ class Relayer:
         bump = FEE_BUMP_STEP ** len(st.tx_hashes)
         await self._send(s, st, prepared, nonce=st.tx_nonce, bump=bump)
         cycle.bumped += 1
+
+    async def _infer_revert(self, st: Settlement, block_number: int) -> RevertInfo | None:
+        """A replay one block earlier cannot see the block's own timestamp. If the quote was
+        already too old by the time of the block that mined the tx, that is the reason."""
+        block = await self.client.w3.eth.get_block(block_number)
+        params = await self.client.exchange_params()
+        if (
+            st.quote_timestamp is not None
+            and int(block["timestamp"]) - st.quote_timestamp > params.max_staleness
+        ):
+            return RevertInfo("StaleQuote", {"inferred": True})
+        return None
 
     def _requeue(self, st: Settlement, reason: str) -> None:
         cfg = self.settings
@@ -469,6 +483,15 @@ class Relayer:
             self._requeue(st, f"systemic:{label}")
             st.attempts -= 1  # not the pair's fault
             return
+        if verdict is Verdict.UNKNOWN and mined:
+            # Replaying one block earlier cannot see effects earlier in the SAME block (an approval
+            # revoked, an order cancelled): diagnose from the chain's current state instead.
+            chain_now = await self.client.latest_block_timestamp()
+            for maker in sorted({buy.maker, sell.maker}):
+                await snapshot.enforce(s, self.client, maker, out, chain_now)
+            await s.refresh(st)
+            if st.status not in lifecycle.IN_FLIGHT:
+                return
         # TRANSIENT (stale/future quote, outside band) or UNKNOWN: bounded retry.
         if info is not None and info.name in ALARMING:
             log.error("quote signer is not authorised on the oracle", extra={"revert": label})

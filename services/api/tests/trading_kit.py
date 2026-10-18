@@ -23,10 +23,11 @@ from sqlalchemy import select
 from web3 import Web3
 
 from app.chain import orders as eip712
-from app.models import Order, Settlement, Trade
+from app.models import IndexerBlock, IndexerState, Order, Settlement, Trade
 from app.pricing import publish as price_publish
 from app.pricing.quotes import PriceQuote, sign_quote
 from app.pricing.repo import DEFAULT_MARKET_ID, ensure_default_market
+from app.workers.listener import CURSOR
 from app.workers.trading import TradingBundle, build_trading
 from tests.conftest import KEY_PRICER, KEY_RELAYER, Harness, SettingsFactory
 from tests.helpers import login
@@ -73,7 +74,10 @@ class Chain:
 
     def _set_balance(self, token: str, owner: str, amount: int) -> None:
         slot = keccak(encode(["address", "uint256"], [owner, 0]))
-        self.rpc("anvil_setStorageAt", [token, "0x" + slot.hex(), "0x" + amount.to_bytes(32, "big").hex()])
+        self.rpc(
+            "anvil_setStorageAt",
+            [token, "0x" + slot.hex(), "0x" + amount.to_bytes(32, "big").hex()],
+        )
 
     def fund_watt(self, address: str, wh: int) -> None:
         self._set_balance(self.watt.address, address, wh)
@@ -84,12 +88,39 @@ class Chain:
     def send(self, fn: Any, key: str, **tx: Any) -> Any:
         acct = Account.from_key(key)
         self.eth(acct.address)
-        params = {"from": acct.address, "nonce": self.w3.eth.get_transaction_count(acct.address), **tx}
+        params = {
+            "from": acct.address,
+            "nonce": self.w3.eth.get_transaction_count(acct.address),
+            **tx,
+        }
         built = fn.build_transaction(params)
         h = self.w3.eth.send_raw_transaction(acct.sign_transaction(built).raw_transaction)
         rcpt = self.w3.eth.wait_for_transaction_receipt(h, timeout=30)
         assert rcpt["status"] == 1, "transaction reverted"
         return rcpt
+
+    def send_nowait(self, fn: Any, key: str, *, tip_gwei: int = 0) -> str:
+        """Broadcast without waiting for a receipt (for automine-off races). A high `tip_gwei`
+        makes Anvil order the tx before lower-tip ones in the same block."""
+        acct = Account.from_key(key)
+        self.eth(acct.address)
+        params: dict[str, Any] = {
+            "from": acct.address,
+            "nonce": self.w3.eth.get_transaction_count(acct.address, "pending"),
+        }
+        if tip_gwei:
+            params["maxPriorityFeePerGas"] = Web3.to_wei(tip_gwei, "gwei")
+            params["maxFeePerGas"] = Web3.to_wei(tip_gwei + 100, "gwei")
+        built = fn.build_transaction(params)
+        return (
+            "0x"
+            + bytes(
+                self.w3.eth.send_raw_transaction(acct.sign_transaction(built).raw_transaction)
+            ).hex()
+        )
+
+    def receipt_status(self, tx_hash: str) -> int:
+        return int(self.w3.eth.get_transaction_receipt(tx_hash)["status"])  # type: ignore[arg-type]
 
     def block_ts(self) -> int:
         return int(self.w3.eth.get_block("latest")["timestamp"])
@@ -101,9 +132,12 @@ class Chain:
         for _ in range(n):
             self.rpc("evm_mine", [])
 
-    def increase_time(self, seconds: int) -> None:
+    def increase_time(self, seconds: int, *, mine: bool = True) -> None:
+        """Move chain time forward. `mine=False` leaves pending txs pending (the next block that
+        is mined, with whatever is in the mempool, carries the later timestamp)."""
         self.rpc("evm_increaseTime", [seconds])
-        self.mine()
+        if mine:
+            self.mine()
 
     def balance_watt(self, a: str) -> int:
         return int(self.watt.functions.balanceOf(a).call())
@@ -210,15 +244,25 @@ async def new_trader(
 
 
 async def seed_market(h: Harness) -> None:
+    """Create the default market and start the listener at the current head (the shared Anvil
+    carries events from earlier tests that this test must not replay)."""
     async with h.app.state.sessionmaker() as s:
         await ensure_default_market(s)  # commits itself
+    w3 = h.app.state.chain.client.w3
+    head = int(await w3.eth.block_number)
+    block = await w3.eth.get_block(head)
+    async with h.app.state.sessionmaker() as s, s.begin():
+        s.add(IndexerState(name=CURSOR, last_block=head))
+        s.add(IndexerBlock(block_number=head, block_hash="0x" + bytes(block["hash"]).hex()))
 
 
 async def post_quote(h: Harness, chain: Chain, price: int, *, age: int = 0) -> PriceQuote:
     """Publish a signed engine quote exactly where the pricing engine does (Redis)."""
     ts = chain.block_ts() - age
     q = PriceQuote(market_id=MID, price=price, timestamp=ts)
-    signed = sign_quote(KEY_PRICER, h.settings.chain_id, h.app.state.chain.client.exchange_address, q)
+    signed = sign_quote(
+        KEY_PRICER, h.settings.chain_id, h.app.state.chain.client.exchange_address, q
+    )
     await h.app.state.redis.set(price_publish.quote_key(MID), json.dumps(signed.to_json()))
     return q
 
@@ -272,6 +316,20 @@ async def settlements(h: Harness) -> list[Settlement]:
 
 async def trades(h: Harness) -> list[Trade]:
     return await rows(h, Trade)
+
+
+def order_struct(body: dict[str, Any]) -> tuple[Any, ...]:
+    """The `Order` tuple for cancel(order) from a body built by `Trader.body`."""
+    return (
+        Web3.to_checksum_address(body["maker"]),
+        bytes.fromhex(body["marketId"][2:]),
+        body["side"],
+        int(body["amountWh"]),
+        int(body["limitPrice"]),
+        int(body["expiry"]),
+        int(body["nonce"]),
+        bytes.fromhex(body["salt"][2:]),
+    )
 
 
 def now() -> float:
