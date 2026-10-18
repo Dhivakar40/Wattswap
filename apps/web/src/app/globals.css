@@ -1,60 +1,136 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Design tokens: dark is the default theme (ThemeProvider defaultTheme=dark); :root holds the light theme. */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-/* Design tokens. Dark is the default theme (see ThemeProvider); .light overrides. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --font-heading: var(--font-sans);
+  --font-sans: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --background: hsl(0 0% 100%);
+  --foreground: hsl(222 28% 10%);
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(222 28% 10%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(222 28% 10%);
+  --primary: hsl(152 75% 26%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(210 25% 94%);
+  --secondary-foreground: hsl(222 28% 10%);
+  --muted: hsl(210 25% 95%);
+  --muted-foreground: hsl(215 16% 35%);
+  --accent: hsl(38 92% 40%);
+  --accent-foreground: hsl(0 0% 100%);
+  --destructive: hsl(0 72% 42%);
+  --border: hsl(214 20% 85%);
+  --input: hsl(214 20% 85%);
+  --ring: hsl(152 75% 30%);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --success: hsl(152 75% 26%);
+  --warning: hsl(38 92% 35%);
+}
+
+.dark {
+  --background: hsl(222 28% 7%);
+  --foreground: hsl(210 20% 96%);
+  --card: hsl(222 26% 10%);
+  --card-foreground: hsl(210 20% 96%);
+  --popover: hsl(222 26% 10%);
+  --popover-foreground: hsl(210 20% 96%);
+  --primary: hsl(152 70% 45%);
+  --primary-foreground: hsl(222 28% 7%);
+  --secondary: hsl(222 20% 16%);
+  --secondary-foreground: hsl(210 20% 96%);
+  --muted: hsl(222 20% 14%);
+  --muted-foreground: hsl(215 16% 70%);
+  --accent: hsl(43 96% 56%);
+  --accent-foreground: hsl(222 28% 7%);
+  --destructive: hsl(0 72% 55%);
+  --border: hsl(222 18% 20%);
+  --input: hsl(222 18% 20%);
+  --ring: hsl(152 70% 55%);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+  --success: hsl(152 70% 45%);
+  --warning: hsl(43 96% 56%);
+}
+
 @layer base {
-  :root {
-    --background: 222 28% 7%;
-    --foreground: 210 20% 96%;
-    --card: 222 26% 10%;
-    --card-foreground: 210 20% 96%;
-    --primary: 152 70% 45%; /* solar green */
-    --primary-foreground: 222 28% 7%;
-    --secondary: 222 20% 16%;
-    --secondary-foreground: 210 20% 96%;
-    --muted: 222 20% 14%;
-    --muted-foreground: 215 16% 70%;
-    --accent: 43 96% 56%; /* energy amber */
-    --accent-foreground: 222 28% 7%;
-    --destructive: 0 72% 55%;
-    --destructive-foreground: 210 20% 98%;
-    --success: 152 70% 45%;
-    --warning: 43 96% 56%;
-    --border: 222 18% 20%;
-    --input: 222 18% 20%;
-    --ring: 152 70% 55%;
-    --radius: 0.6rem;
-    color-scheme: dark;
-  }
-
-  .light {
-    --background: 0 0% 100%;
-    --foreground: 222 28% 10%;
-    --card: 0 0% 100%;
-    --card-foreground: 222 28% 10%;
-    --primary: 152 75% 26%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 210 25% 94%;
-    --secondary-foreground: 222 28% 10%;
-    --muted: 210 25% 95%;
-    --muted-foreground: 215 16% 35%;
-    --accent: 38 92% 40%;
-    --accent-foreground: 0 0% 100%;
-    --destructive: 0 72% 42%;
-    --destructive-foreground: 0 0% 100%;
-    --success: 152 75% 26%;
-    --warning: 38 92% 35%;
-    --border: 214 20% 85%;
-    --input: 214 20% 85%;
-    --ring: 152 75% 30%;
-    color-scheme: light;
-  }
-
   * {
-    @apply border-border;
+    @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
   }
 }
