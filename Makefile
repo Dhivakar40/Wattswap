@@ -85,7 +85,7 @@ test-contracts: contracts-deps
 	cd contracts && $(FORGE) test
 test-contracts-ci: contracts-deps ## Contract tests with the heavy fuzz/invariant profile
 	cd contracts && FOUNDRY_PROFILE=ci $(FORGE) test
-coverage-contracts: contracts-deps ## Fail if contracts/src line coverage < 95%
+coverage-contracts: contracts-deps ## Fail if contracts/src line coverage < 100%
 	FORGE="$(FORGE)" bash scripts/check-coverage.sh
 slither: contracts-deps ## Static analysis (fails on medium/high)
 	cd contracts && slither . --config-file slither.config.json --fail-medium

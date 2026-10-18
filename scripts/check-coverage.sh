@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Fails if line coverage of contracts/src is below THRESHOLD (default 95).
+# Fails if line coverage of contracts/src is below THRESHOLD (default 100).
 set -euo pipefail
-THRESHOLD="${THRESHOLD:-95}"
+THRESHOLD="${THRESHOLD:-100}"
 cd "$(dirname "$0")/../contracts"
 FORGE="${FORGE:-forge}"
 $FORGE coverage --no-match-coverage "(test|script)" --report lcov --report-file lcov.info >/dev/null

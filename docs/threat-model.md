@@ -31,6 +31,7 @@ is worthless; the model still treats the contracts as if they held real value.
 | T-9 | Fee abuse / underflow | `feeBps <= 500`; `fee <= cost` by construction; `cost - fee` cannot underflow | `invariant_feeMath`, fuzz |
 | T-10 | Fake energy minting | Device signature + `MINTER_ROLE` + plausibility + unique `readingId` + completed interval (ADR-003) | EnergyToken suite |
 | T-11 | Reading replay | Global `readingMinted[readingId]` | `test_mint_revertsReplayedReadingId` |
+| T-11b | Overlapping / out-of-order intervals double-count energy (key holder signs several readings for the same time) | Per-meter `lastIntervalEnd`; `intervalStart >= lastIntervalEnd` enforced in `MeterRegistry.recordReading` on every mint; only `EnergyToken` holds `RECORDER_ROLE` (ADR-003 amendment) | `test_interval_*`, `MeterIntervalFuzzTest`, `invariant_mintedNeverExceedsCapacityTimesCoveredTime`, `invariant_intervalsDisjoint` |
 | T-12 | Compromised device key | Registrar rotates key / deactivates meter; old signatures stop working immediately | `test_mint_rotatedKey_*` |
 | T-13 | Compromised pricer key | Impact bounded by band and staleness; admin revokes role; pause | role tests |
 | T-14 | Self-trade wash trades | `SelfTrade` revert (does not stop two wallets owned by one person; off-chain surveillance) | `test_revert_selfTrade` |
@@ -62,6 +63,10 @@ Not covered by Slither and therefore reviewed manually: EIP-712 type strings (cr
 
 - No third-party audit. Do not deploy with real value.
 - Relayer can choose among valid matches and any price inside the band (ADR-004).
+- Readings must be minted in chronological order per meter. A device that was offline backfills oldest-first;
+  an interval skipped is a permanent gap. Within the plausibility ceiling, a device key can still *claim* any
+  amount up to capacity x time x safety factor for time not yet covered; that residual is inherent to a
+  signed-meter model.
 - Meter data authenticity ends at the device key; a physically tampered or simulated device signs whatever it is
   told to. For the demo this is by design (labeled simulator).
 - Fee-on-transfer / rebasing tokens are unsupported (only the two deployed tokens are used).
