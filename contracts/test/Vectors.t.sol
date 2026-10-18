@@ -208,8 +208,18 @@ contract VectorsTest is Test {
     }
 
     function _quoteEntry() internal view returns (string memory) {
+        return _quoteVector("price_quote", MARKET, 150_000, 1_800_000_000);
+    }
+
+    /// @dev One PriceQuote vector: digest cross-checked against the exchange's own `hashQuote`.
+    ///      Values stay below 2^53 so the JSON numbers survive JavaScript parsing.
+    function _quoteVector(string memory name, bytes32 market, uint256 price, uint256 timestamp)
+        internal
+        view
+        returns (string memory)
+    {
         OrderLib.PriceQuote memory q =
-            OrderLib.PriceQuote({marketId: MARKET, price: 150_000, timestamp: 1_800_000_000});
+            OrderLib.PriceQuote({marketId: market, price: price, timestamp: timestamp});
         bytes32 ds = _domainSeparator("WattSwapExchange", EXCHANGE_ADDR);
         bytes32 sh = OrderLib.quoteHash(q);
         assertEq(MessageHashUtils.toTypedDataHash(ds, sh), exchange.hashQuote(q), "quote digest");
@@ -219,10 +229,16 @@ contract VectorsTest is Test {
             ',"PriceQuote":[{"name":"marketId","type":"bytes32"},{"name":"price","type":"uint256"},{"name":"timestamp","type":"uint256"}]}'
         );
         string memory message = string.concat(
-            '{"marketId":"', vm.toString(q.marketId), '","price":150000,"timestamp":1800000000}'
+            '{"marketId":"',
+            vm.toString(q.marketId),
+            '","price":',
+            vm.toString(price),
+            ',"timestamp":',
+            vm.toString(timestamp),
+            "}"
         );
         return _entry(
-            "price_quote",
+            name,
             "PriceQuote",
             types,
             _domainJson("WattSwapExchange", EXCHANGE_ADDR),
@@ -230,6 +246,24 @@ contract VectorsTest is Test {
             ds,
             sh,
             PRICER_PK
+        );
+    }
+
+    /// @dev Edge cases for the pricing engine's signer: smallest price, a typical night price,
+    ///      the largest price that is a safe JSON integer, and a second market id.
+    function _quoteEdgeEntries() internal view returns (string memory) {
+        return string.concat(
+            _quoteVector("price_quote_min_price", MARKET, 1, 1_800_000_001),
+            ",",
+            _quoteVector("price_quote_night", MARKET, 142_000, 1_800_003_600),
+            ",",
+            _quoteVector(
+                "price_quote_max_safe_price", MARKET, 9_007_199_254_740_991, 9_007_199_254_740_991
+            ),
+            ",",
+            _quoteVector(
+                "price_quote_second_market", keccak256("WATT-mUSDC-2"), 150_000, 1_800_000_000
+            )
         );
     }
 
@@ -320,6 +354,8 @@ contract VectorsTest is Test {
             _quoteEntry(),
             ",",
             _readingEntry(),
+            ",",
+            _quoteEdgeEntries(),
             "]"
         );
         return string.concat("{", DESCRIPTION, ',"chainId":31337,', keys, ",", vectors, "}");
@@ -344,8 +380,17 @@ contract VectorsTest is Test {
     /// Every signature in the generated file recovers to its declared signer.
     function test_signaturesRecoverToSigners() public {
         string memory json = _build();
-        string[4] memory names = ["order_buy", "order_sell", "price_quote", "meter_reading"];
-        for (uint256 i = 0; i < 4; i++) {
+        string[8] memory names = [
+            "order_buy",
+            "order_sell",
+            "price_quote",
+            "meter_reading",
+            "price_quote_min_price",
+            "price_quote_night",
+            "price_quote_max_safe_price",
+            "price_quote_second_market"
+        ];
+        for (uint256 i = 0; i < 8; i++) {
             string memory base = string.concat(".vectors[", vm.toString(i), "]");
             assertEq(vm.parseJsonString(json, string.concat(base, ".name")), names[i]);
             bytes32 digest = vm.parseJsonBytes32(json, string.concat(base, ".digest"));
