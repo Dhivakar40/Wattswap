@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {stdError} from "forge-std/StdError.sol";
 import {Base} from "../utils/Base.t.sol";
 import {EnergyToken} from "src/EnergyToken.sol";
 import {MeterRegistry} from "src/MeterRegistry.sol";
@@ -151,6 +152,56 @@ contract EnergyTokenTest is Base {
         registry.setActive(METER, false);
         vm.expectRevert(abi.encodeWithSelector(MeterRegistry.MeterInactive.selector, METER));
         _mint(r2, sig);
+    }
+
+    function _readingAt(bytes32 id, uint256 wh, uint256 start, uint256 secs)
+        internal
+        view
+        returns (EnergyToken.Reading memory r, bytes memory sig)
+    {
+        r = EnergyToken.Reading(METER, id, wh, start, secs);
+        sig = _signReading(devicePk, r);
+    }
+
+    function test_mint_inOrderAndAdjacentSucceeds() public {
+        (EnergyToken.Reading memory a, bytes memory sa) = _readingAt(R1, 500, T0 - 1_800, 900);
+        (EnergyToken.Reading memory b, bytes memory sb) =
+            _readingAt(keccak256("r2"), 500, T0 - 900, 900); // starts exactly at a's end
+        _mint(a, sa);
+        _mint(b, sb);
+        assertEq(registry.lastIntervalEnd(METER), T0);
+    }
+
+    function test_mint_revertsOverlappingInterval() public {
+        (EnergyToken.Reading memory a, bytes memory sa) = _readingAt(R1, 500, T0 - 1_800, 900);
+        (EnergyToken.Reading memory b, bytes memory sb) =
+            _readingAt(keccak256("r2"), 500, T0 - 1_000, 900); // overlaps a by 100 s
+        _mint(a, sa);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MeterRegistry.IntervalOverlap.selector, METER, T0 - 1_000, T0 - 900
+            )
+        );
+        _mint(b, sb);
+    }
+
+    function test_mint_revertsOutOfOrderBackfill() public {
+        (EnergyToken.Reading memory late_, bytes memory sl) = _readingAt(R1, 500, T0 - 900, 900);
+        (EnergyToken.Reading memory early, bytes memory se) =
+            _readingAt(keccak256("r2"), 500, T0 - 3_600, 900);
+        _mint(late_, sl);
+        vm.expectRevert(
+            abi.encodeWithSelector(MeterRegistry.IntervalOverlap.selector, METER, T0 - 3_600, T0)
+        );
+        _mint(early, se);
+        assertFalse(watt.readingMinted(keccak256("r2")));
+    }
+
+    function test_mint_revertsIntervalOverflow() public {
+        (EnergyToken.Reading memory r, bytes memory sig) =
+            _readingAt(R1, 1, type(uint256).max - 10, 900);
+        vm.expectRevert(stdError.arithmeticError);
+        _mint(r, sig);
     }
 
     function test_mint_supportsContractWalletDevice() public {

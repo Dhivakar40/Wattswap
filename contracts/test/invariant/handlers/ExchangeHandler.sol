@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {WattSwapExchange} from "src/WattSwapExchange.sol";
 import {EnergyToken} from "src/EnergyToken.sol";
 import {MockUSDC} from "src/MockUSDC.sol";
+import {MeterRegistry} from "src/MeterRegistry.sol";
 import {OrderLib} from "src/libraries/OrderLib.sol";
 
 /// @dev Drives random-but-bounded protocol activity and keeps ghost accounting that the
@@ -186,11 +187,16 @@ contract ExchangeHandler is Test {
 
     function mintReading(uint256 amountSeed) external {
         uint256 amount = bound(amountSeed, 1, 1_500); // 15 min @ 5 kW @ 120%
+        // Intervals must be minted in order and be complete: continue from the meter's last
+        // interval end, or skip this call if the next 15-minute slot has not finished yet.
+        uint256 start = MeterRegistry(address(watt.registry())).lastIntervalEnd(meterId);
+        if (start == 0) start = block.timestamp - 15 minutes;
+        if (start + 15 minutes > block.timestamp) return;
         EnergyToken.Reading memory r = EnergyToken.Reading({
             meterId: meterId,
             readingId: keccak256(abi.encode("reading", ++_readingCounter)),
             amountWh: amount,
-            intervalStart: block.timestamp - 15 minutes,
+            intervalStart: start,
             intervalSeconds: 15 minutes
         });
         (uint8 v, bytes32 rr, bytes32 ss) = vm.sign(devicePk, watt.hashReading(r));

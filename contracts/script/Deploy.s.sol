@@ -72,6 +72,7 @@ contract Deploy is Script {
         );
 
         d.registry.grantRole(d.registry.REGISTRAR_ROLE(), registrar);
+        d.registry.grantRole(d.registry.RECORDER_ROLE(), address(d.watt));
         d.watt.grantRole(d.watt.MINTER_ROLE(), minter);
         d.oracle.grantRole(d.oracle.PRICER_ROLE(), pricer);
         d.exchange.grantRole(d.exchange.RELAYER_ROLE(), relayer);

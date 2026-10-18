@@ -79,6 +79,8 @@ contract EnergyToken is ERC20, ERC20Permit, AccessControl, Pausable {
 
     /// @notice Mints WATT to the meter owner for a signed reading.
     /// @dev Caller must be MINTER_ROLE (the oracle) AND the device key must have signed `r`.
+    ///      Readings per meter must be minted in order and must not overlap: the registry rejects
+    ///      `intervalStart < lastIntervalEnd`. Offline devices therefore backfill oldest-first.
     function mint(Reading calldata r, bytes calldata deviceSig)
         external
         onlyRole(MINTER_ROLE)
@@ -89,13 +91,13 @@ contract EnergyToken is ERC20, ERC20Permit, AccessControl, Pausable {
         uint256 end = r.intervalStart + r.intervalSeconds;
         if (end > block.timestamp) revert ReadingNotComplete(end);
 
+        readingMinted[r.readingId] = true; // effects before the external registry call
         (address owner, address signer) =
-            registry.validateReading(r.meterId, r.amountWh, r.intervalSeconds);
+            registry.recordReading(r.meterId, r.amountWh, r.intervalStart, r.intervalSeconds);
         if (!SignatureChecker.isValidSignatureNow(signer, hashReading(r), deviceSig)) {
             revert InvalidDeviceSignature();
         }
 
-        readingMinted[r.readingId] = true;
         _mint(owner, r.amountWh);
         emit ReadingMinted(
             r.readingId, r.meterId, owner, r.amountWh, r.intervalStart, r.intervalSeconds

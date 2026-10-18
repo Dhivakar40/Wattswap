@@ -1,4 +1,4 @@
-# WattSwap local stack. meter-sim joins in Phase 2.
+# WattSwap local stack. The meter simulator is opt-in: `docker compose --profile sim up meter-sim`.
 # All config comes from .env (copy .env.example). Dev keys are public Anvil defaults.
 name: wattswap
 
@@ -42,7 +42,9 @@ services:
       retries: 10
 
   api:
-    build: ./services/api
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
     environment:
       API_ENV: ${API_ENV:-development}
       API_LOG_LEVEL: ${API_LOG_LEVEL:-INFO}
@@ -51,6 +53,17 @@ services:
       REDIS_URL: redis://redis:6379/0
       RPC_URL: http://anvil:8545
       CHAIN_ID: ${CHAIN_ID:-31337}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+      JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-43200}
+      SIWE_DOMAIN: ${SIWE_DOMAIN:-localhost:3000}
+      ADMIN_ADDRESSES: ${ADMIN_ADDRESSES:-}
+      READING_INTERVAL_SECONDS: ${READING_INTERVAL_SECONDS:-900}
+      MINT_CONFIRMATIONS: ${MINT_CONFIRMATIONS:-1}
+      # Role keys. Each must be a DIFFERENT address or the API refuses to start.
+      ORACLE_PRIVATE_KEY: ${ORACLE_PRIVATE_KEY:?set ORACLE_PRIVATE_KEY in .env}
+      REGISTRAR_PRIVATE_KEY: ${REGISTRAR_PRIVATE_KEY:?set REGISTRAR_PRIVATE_KEY in .env}
+      RELAYER_PRIVATE_KEY: ${RELAYER_PRIVATE_KEY:-}
+      PRICER_PRIVATE_KEY: ${PRICER_PRIVATE_KEY:-}
     ports: ["${API_PORT:-8000}:8000"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -65,6 +78,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # SIMULATED smart meter (not real hardware). Opt-in: needs a provisioned meter first
+  # (`make sim-provision`), then `docker compose --profile sim up meter-sim`.
+  meter-sim:
+    profiles: ["sim"]
+    build: ./services/meter-sim
+    environment:
+      READING_INTERVAL_SECONDS: ${READING_INTERVAL_SECONDS:-900}
+    command:
+      - run
+      - --api=http://api:8000
+      - --config=/runtime/meters.json
+      - --demo
+      - --demo-seconds=${SIM_DEMO_SECONDS:-20}
+    volumes: ["./services/meter-sim/runtime:/runtime:ro"]
+    depends_on:
+      api: { condition: service_healthy }
 
   web:
     build:

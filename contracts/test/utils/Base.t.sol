@@ -73,6 +73,7 @@ abstract contract Base is Test {
         oracle.grantRole(oracle.PRICER_ROLE(), pricer);
         exchange.grantRole(exchange.RELAYER_ROLE(), relayer);
         exchange.setMarket(MARKET, true);
+        registry.grantRole(registry.RECORDER_ROLE(), address(watt));
         vm.stopPrank();
 
         vm.prank(registrar);

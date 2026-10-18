@@ -28,7 +28,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make lint-contracts test-contracts-ci
-      - name: Coverage gate (>= 95% lines on contracts/src)
+      - name: Coverage gate (100% lines on contracts/src)
         run: make coverage-contracts
       - name: Slither (fails on medium/high)
         run: uv tool install slither-analyzer && make slither
@@ -59,10 +59,21 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://wattswap:ci_password@localhost:5432/wattswap
       REDIS_URL: redis://localhost:6379/0
+      # Missing postgres/redis/anvil must FAIL the build, never skip tests silently.
+      REQUIRE_SERVICES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: make lint-api lint-meter-sim test-api test-meter-sim
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.5
+      - name: Install Foundry libs (the tests run the real Deploy.s.sol on a fresh Anvil)
+        run: make contracts-deps
+      - run: make lint-api lint-meter-sim test-meter-sim
+      - name: API unit + API + migration tests
+        run: cd services/api && uv run pytest -q -m "not integration" --cov=app --cov-report=term
+      - name: End-to-end gate (simulated meter -> signed reading -> WATT minted on Anvil)
+        run: make test-integration
 
   web:
     runs-on: ubuntu-latest

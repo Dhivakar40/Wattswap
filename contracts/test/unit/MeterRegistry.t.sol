@@ -120,32 +120,127 @@ contract MeterRegistryTest is Base {
         registry.getMeter(M2);
     }
 
-    function test_validateReading_ok_andBoundary() public view {
-        // 5 kW x 900 s x 120% / 3600 = 1500 Wh
-        assertEq(registry.maxEnergyWh(5_000, 900), 1_500);
-        (address o, address s) = registry.validateReading(METER, 1_500, 900);
-        assertEq(o, seller);
-        assertEq(s, device);
+    // ------------------------------------------------------------ recordReading
+
+    function _record(bytes32 id, uint256 wh, uint256 start, uint256 secs) internal {
+        vm.prank(address(watt));
+        registry.recordReading(id, wh, start, secs);
     }
 
-    function test_validateReading_reverts() public {
+    function test_maxEnergyWh_formula() public view {
+        // 5 kW x 900 s x 120% / 3600 = 1500 Wh
+        assertEq(registry.maxEnergyWh(5_000, 900), 1_500);
+    }
+
+    function test_recordReading_ok_andBoundary() public {
+        vm.expectEmit(true, true, true, true);
+        emit MeterRegistry.IntervalRecorded(METER, T0, T0 + 900);
+        vm.prank(address(watt));
+        (address o, address s) = registry.recordReading(METER, 1_500, T0, 900);
+        assertEq(o, seller);
+        assertEq(s, device);
+        assertEq(registry.lastIntervalEnd(METER), T0 + 900);
+    }
+
+    function test_recordReading_requiresRecorderRole() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector,
+                buyer,
+                registry.RECORDER_ROLE()
+            )
+        );
+        vm.prank(buyer);
+        registry.recordReading(METER, 1, T0, 900);
+    }
+
+    function test_recordReading_plausibilityUsesOwnIntervalLength() public {
+        // 5 kW: 60 s -> 100 Wh, 3600 s -> 6000 Wh (not the 900 s default)
+        _record(METER, 100, T0, 60);
+        vm.expectRevert(abi.encodeWithSelector(MeterRegistry.ReadingImplausible.selector, 101, 100));
+        _record(METER, 101, T0 + 60, 60);
+        _record(METER, 6_000, T0 + 60, 3600);
+        vm.expectRevert(
+            abi.encodeWithSelector(MeterRegistry.ReadingImplausible.selector, 6_001, 6_000)
+        );
+        _record(METER, 6_001, T0 + 3_660, 3600);
+    }
+
+    function test_recordReading_revertsImplausible() public {
         vm.expectRevert(
             abi.encodeWithSelector(MeterRegistry.ReadingImplausible.selector, 1_501, 1_500)
         );
-        registry.validateReading(METER, 1_501, 900);
+        _record(METER, 1_501, T0, 900);
+    }
 
+    function test_recordReading_revertsBadInterval() public {
+        vm.expectRevert(abi.encodeWithSelector(MeterRegistry.InvalidInterval.selector, 0));
+        _record(METER, 0, T0, 0); // zero-length: intervalEnd == intervalStart
         vm.expectRevert(abi.encodeWithSelector(MeterRegistry.InvalidInterval.selector, 59));
-        registry.validateReading(METER, 1, 59);
+        _record(METER, 1, T0, 59);
         vm.expectRevert(abi.encodeWithSelector(MeterRegistry.InvalidInterval.selector, 1 days + 1));
-        registry.validateReading(METER, 1, 1 days + 1);
+        _record(METER, 1, T0, 1 days + 1);
+    }
 
+    function test_recordReading_revertsUnknownAndInactive() public {
         vm.expectRevert(abi.encodeWithSelector(MeterRegistry.MeterNotFound.selector, M2));
-        registry.validateReading(M2, 1, 900);
+        _record(M2, 1, T0, 900);
 
         vm.prank(registrar);
         registry.setActive(METER, false);
         vm.expectRevert(abi.encodeWithSelector(MeterRegistry.MeterInactive.selector, METER));
-        registry.validateReading(METER, 1, 900);
+        _record(METER, 1, T0, 900);
+    }
+
+    function test_interval_overlapRejected() public {
+        _record(METER, 100, T0, 900);
+        // starts one second before the previous interval ended
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MeterRegistry.IntervalOverlap.selector, METER, T0 + 899, T0 + 900
+            )
+        );
+        _record(METER, 100, T0 + 899, 900);
+        // identical interval
+        vm.expectRevert(
+            abi.encodeWithSelector(MeterRegistry.IntervalOverlap.selector, METER, T0, T0 + 900)
+        );
+        _record(METER, 100, T0, 900);
+    }
+
+    function test_interval_equalBoundaryAllowed() public {
+        _record(METER, 100, T0, 900);
+        _record(METER, 100, T0 + 900, 900); // start == previous end
+        assertEq(registry.lastIntervalEnd(METER), T0 + 1_800);
+    }
+
+    function test_interval_gapAllowed() public {
+        _record(METER, 100, T0, 900);
+        _record(METER, 100, T0 + 5_000, 900);
+        assertEq(registry.lastIntervalEnd(METER), T0 + 5_900);
+    }
+
+    function test_interval_outOfOrderRejected() public {
+        _record(METER, 100, T0 + 1_800, 900);
+        vm.expectRevert(
+            abi.encodeWithSelector(MeterRegistry.IntervalOverlap.selector, METER, T0, T0 + 2_700)
+        );
+        _record(METER, 100, T0, 900); // an earlier, non-overlapping interval is still too late
+    }
+
+    function test_interval_isPerMeter() public {
+        vm.prank(registrar);
+        registry.registerMeter(M2, buyer, device, 5_000, 0, 0);
+        _record(METER, 100, T0, 900);
+        _record(M2, 100, T0, 900); // same interval on another meter is fine
+        assertEq(registry.lastIntervalEnd(M2), T0 + 900);
+    }
+
+    function test_interval_failedRecordLeavesStateUnchanged() public {
+        _record(METER, 100, T0, 900);
+        vm.expectRevert();
+        _record(METER, 99_999, T0 + 900, 900); // implausible
+        assertEq(registry.lastIntervalEnd(METER), T0 + 900);
     }
 
     function test_setPlausibility() public {

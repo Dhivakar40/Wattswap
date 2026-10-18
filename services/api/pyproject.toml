@@ -15,6 +15,9 @@ dependencies = [
   "web3>=7.0,<8",
   "httpx>=0.28",
   "prometheus-client>=0.21",
+  "pyjwt>=2.9",
+  "siwe>=4.3",
+  "abnf==2.4.0",
 ]
 
 [dependency-groups]
@@ -36,16 +39,37 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "S", "ANN", "ASYNC", "RUF"]
 
+ignore = [
+  "E501",  # long strings/messages are fine; `ruff format` owns code layout
+  "S101",  # assert is used for type narrowing only
+]
+
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105"]
+"tests/**" = ["S101", "S105", "S311", "ANN401"]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
+mypy_path = "../meter-sim"
 plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# These libraries ship type hints but do not re-export their public names explicitly.
+module = ["eth_utils", "eth_utils.*", "eth_abi", "eth_abi.*", "hexbytes", "eth_account.*"]
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = ["siwe", "siwe.*", "asyncpg", "asyncpg.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "../meter-sim"]
+markers = ["integration: end-to-end pipeline against real Anvil, Postgres and Redis"]
+
+[tool.coverage.run]
+source = ["app"]
+# SQLAlchemy's async layer runs on greenlets; without this, awaited DB code is under-reported.
+concurrency = ["thread", "greenlet"]
