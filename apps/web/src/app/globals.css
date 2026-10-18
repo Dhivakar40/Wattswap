@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens. Dark is the default theme (see ThemeProvider); .light overrides. */
+@layer base {
+  :root {
+    --background: 222 28% 7%;
+    --foreground: 210 20% 96%;
+    --card: 222 26% 10%;
+    --card-foreground: 210 20% 96%;
+    --primary: 152 70% 45%; /* solar green */
+    --primary-foreground: 222 28% 7%;
+    --secondary: 222 20% 16%;
+    --secondary-foreground: 210 20% 96%;
+    --muted: 222 20% 14%;
+    --muted-foreground: 215 16% 70%;
+    --accent: 43 96% 56%; /* energy amber */
+    --accent-foreground: 222 28% 7%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 210 20% 98%;
+    --success: 152 70% 45%;
+    --warning: 43 96% 56%;
+    --border: 222 18% 20%;
+    --input: 222 18% 20%;
+    --ring: 152 70% 55%;
+    --radius: 0.6rem;
+    color-scheme: dark;
+  }
+
+  .light {
+    --background: 0 0% 100%;
+    --foreground: 222 28% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 28% 10%;
+    --primary: 152 75% 26%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 25% 94%;
+    --secondary-foreground: 222 28% 10%;
+    --muted: 210 25% 95%;
+    --muted-foreground: 215 16% 35%;
+    --accent: 38 92% 40%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 72% 42%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 75% 26%;
+    --warning: 38 92% 35%;
+    --border: 214 20% 85%;
+    --input: 214 20% 85%;
+    --ring: 152 75% 30%;
+    color-scheme: light;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
