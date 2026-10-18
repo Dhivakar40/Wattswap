@@ -1,0 +1,42 @@
+# secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# node
+node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+.pnpm-store/
+.turbo/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+contracts/lcov.info
+
+# os / ide
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/
+
+# docker
+docker-compose.override.yml
