@@ -11,7 +11,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_JWT_SECRET = "dev-only-insecure-jwt-secret-change-me-0123456789"  # noqa: S105
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+def _default_shared_dir() -> Path:
+    """packages/shared in the repo checkout, or /srv/shared inside the API container."""
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "packages" / "shared").is_dir():
+            return parent / "packages" / "shared"
+    return Path("/srv/shared")
+
+
 CHAIN_KEYS = {31337: "anvil", 11155111: "sepolia"}
 
 
@@ -51,7 +59,7 @@ class Settings(BaseSettings):
     pricer_private_key: SecretStr | None = None  # PriceOracle PRICER_ROLE (Phase 3)
 
     # --- contracts ----------------------------------------------------------------------
-    shared_dir: Path = _REPO_ROOT / "packages" / "shared"
+    shared_dir: Path = Field(default_factory=_default_shared_dir)
     energy_token_address: str | None = None
     meter_registry_address: str | None = None
 

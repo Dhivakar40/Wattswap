@@ -41,3 +41,5 @@ Thumbs.db
 # docker
 docker-compose.override.yml
 contracts/lib/
+services/meter-sim/runtime/
+.meter-keys/

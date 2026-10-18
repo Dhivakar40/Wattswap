@@ -21,7 +21,9 @@ endif
 
 .PHONY: help doctor env install up down logs ps build test lint fmt fmt-check clean \
         test-contracts test-api test-meter-sim test-web test-shared \
-        lint-contracts lint-api lint-meter-sim lint-web lint-shared \n        coverage-contracts slither export-abis deploy-local gen-vectors test-contracts-ci
+        lint-contracts lint-api lint-meter-sim lint-web lint-shared \
+        coverage-contracts slither export-abis deploy-local gen-vectors test-contracts-ci \
+        migrate sim-provision sim test-integration
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -62,6 +64,20 @@ deploy-sepolia: contracts-deps ## Deploy to Sepolia (Phase 8 uses this; needs PR
 	cd contracts && $(FORGE) script script/Deploy.s.sol --rpc-url "$$SEPOLIA_RPC_URL" --broadcast --verify
 	$(MAKE) export-abis
 
+# ---- backend / simulator ----------------------------------------------------------
+migrate: ## Apply database migrations (needs postgres from `make up`)
+	cd services/api && uv run alembic upgrade head
+
+# DEV ONLY: the simulator's demo provisioning signs in as an owner wallet. Default: Anvil #5.
+OWNER_PRIVATE_KEY ?= 0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba
+SIM_DIR := services/meter-sim/runtime
+sim-provision: ## DEV ONLY: register a demo (simulated) meter via the API; writes $(SIM_DIR)/meters.json
+	@mkdir -p $(SIM_DIR)
+	@test -f $(SIM_DIR)/device.key || (cd services/meter-sim && uv run python -m meter_sim keygen --out runtime/device.key)
+	cd services/meter-sim && OWNER_PRIVATE_KEY=$(OWNER_PRIVATE_KEY) uv run python -m meter_sim provision 	  --api http://localhost:$${API_PORT:-8000} --device-key runtime/device.key --config runtime/meters.json
+sim: sim-provision ## Run the SIMULATED meter in accelerated DEMO mode (1 interval / 20 s real time)
+	cd services/meter-sim && uv run python -m meter_sim run --api http://localhost:$${API_PORT:-8000} 	  --config runtime/meters.json --demo --demo-seconds 20
+
 up: env ## Build and start postgres, redis, anvil, api, web
 	$(COMPOSE) up -d --build --wait
 	@$(COMPOSE) ps
@@ -91,8 +107,10 @@ slither: contracts-deps ## Static analysis (fails on medium/high)
 	cd contracts && slither . --config-file slither.config.json --fail-medium
 gen-vectors: contracts-deps ## Regenerate packages/shared/vectors/eip712.json from the contracts
 	cd contracts && WRITE_VECTORS=1 $(FORGE) test --match-contract VectorsTest
-test-api:
+test-api: ## API unit + API tests + the Anvil end-to-end pipeline (needs postgres+redis: `make up`)
 	cd services/api && uv run pytest -q
+test-integration: ## Only the end-to-end meter -> mint pipeline on Anvil (fails, not skips, if a service is down)
+	cd services/api && REQUIRE_SERVICES=1 uv run pytest -q -m integration
 test-meter-sim:
 	cd services/meter-sim && uv run pytest -q
 test-shared:

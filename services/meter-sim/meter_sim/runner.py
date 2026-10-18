@@ -94,7 +94,13 @@ async def run(
                 else:
                     stats.posted += 1
                 log.info(
-                    "reading sent",
+                    "reading sent meter=%s interval=%s wh=%s source=%s duplicate=%s%s [SIMULATED]",
+                    device.meter_id[:10],
+                    cursor,
+                    measurement.reading.amount_wh,
+                    measurement.generation.source,
+                    result.duplicate,
+                    " (accelerated)" if cfg.demo else "",
                     extra={
                         "meter_id": device.meter_id,
                         "interval_start": cursor,
