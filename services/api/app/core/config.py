@@ -111,11 +111,9 @@ class Settings(BaseSettings):
     match_poll_ms: int = Field(default=500, ge=50)
     quote_safety_margin_seconds: int = Field(default=60, ge=1)
     band_safety_pct: int = Field(default=90, ge=1, le=100)  # share of the on-chain band we use
-    settle_confirmations: int = Field(default=1, ge=1)
     settle_max_in_flight: int = Field(default=4, ge=1)
     settle_max_attempts: int = Field(default=5, ge=1)
     settle_bump_after_seconds: float = Field(default=20.0, gt=0)
-    settle_tx_timeout_seconds: float = Field(default=300.0, gt=0)
     settle_backoff_base_seconds: float = Field(default=1.0, gt=0)
     settle_backoff_max_seconds: float = Field(default=60.0, gt=0)
     relayer_poll_seconds: float = Field(default=0.5, gt=0)

@@ -2,7 +2,7 @@
 
 Branch: `phase-4-trading` · Target tag: `v0.4.0` (after approval)
 
-Status: **APPROVED — implementing.** Items marked **DECISION** were proposed defaults; the owner's changes are recorded under *Owner changes* at the end.
+Status: **IMPLEMENTED — awaiting PR approval.** Items marked **DECISION** were proposed defaults; the owner's changes are recorded under *Owner changes* at the end.
 
 ## Starting state (facts that shape the design)
 
@@ -96,7 +96,7 @@ Per maker, per token, **total commitment across all open orders** must fit withi
   5. Sign, **persist the raw signed tx and hash on the settlement before broadcast** (`on_signed`), broadcast, `status = submitted`.
 - **Quote freshness at mining time, not only submit time:** the tx may sit in the mempool. The relayer tracks `quote_timestamp` per submitted settlement. If the tx is unmined after `min(bump_after, maxStaleness − quote_safety_margin − quote_age)` seconds (default `bump_after` 20 s), it sends a **replacement at the same nonce with a fee bump (×1.25, which also satisfies the node's ≥10 % rule) and a freshly fetched quote**, recomputing the price. All hashes for the nonce are watched; whichever mines is the result. Because replacements are bounded by `maxStaleness − margin`, a tx carrying a quote that could be stale at inclusion is always superseded first. If a mined settle still reverts with `StaleQuote`/`QuoteFromFuture`/`PriceOutsideBand` (chain-time jump), it is treated as **transient**: re-queued for a new quote, counted against `SETTLE_MAX_ATTEMPTS` (default 5), not failed immediately.
 - **Nonce management:** `TxSender` gives `pending`-count nonces under the Redis lock; the relayer allows up to `SETTLE_MAX_IN_FLIGHT` (default 4) concurrent submitted settlements, one nonce each. A "nonce too low" node error retries with a fresh nonce; the persisted-raw-tx recovery rebroadcasts the *same* signed tx after a crash (never re-signs with a new nonce) — identical to the proven mint-worker design.
-- **Confirmation:** the relayer waits for `SETTLE_CONFIRMATIONS` (default 1 on Anvil, 3 on Sepolia) only to detect reverts and stuck transactions. A **successful** receipt does *not* move the settlement to `confirmed`; the listener does, from the `TradeSettled` event at confirmation depth, so there is a single writer of "confirmed" and DB state cannot diverge from the chain log. A reverted receipt: replay with `revert_reason`, classify, act.
+- **Confirmation:** the relayer reads receipts only to detect reverts and stuck transactions (as built there is no relayer confirmation depth: a reorged-out tx is picked up by the listener's rollback and re-sent by the relayer). A **successful** receipt does *not* move the settlement to `confirmed`; the listener does, from the `TradeSettled` event at confirmation depth, so there is a single writer of "confirmed" and DB state cannot diverge from the chain log. A reverted receipt: replay with `revert_reason`, classify, act.
 
 ### Revert classification (decoded with `RevertDecoder`; MockUSDC/EnergyToken ABIs added so OZ `ERC20Insufficient*` errors decode)
 
@@ -249,3 +249,38 @@ All ten decisions approved, with these additions (they override the text above w
 - **ADR-004** records that off-chain cancel is binding only while settlement is relayer-gated; permissionless settlement requires on-chain cancels or signed cancel attestations.
 - **Release backoff.** When the relayer releases a pair because no feasible price remains, the pair (`buy_hash`, `sell_hash`) goes into `pair_cooldowns` with exponential backoff (`PAIR_COOLDOWN_SECONDS` base 30 s ×2 per consecutive release, capped at `PAIR_COOLDOWN_MAX_SECONDS` 600 s; resets after a confirmed trade). The matcher skips cooled-down pairs. Each release is logged and counted (`wattswap_settlement_releases_total{reason}`), and an integration test shows a price move that makes a pair un-settleable does not cause a re-match loop.
 - **Dust reason.** `cancel_reason = "dust_remainder"` is kept as a stable code so Phase 6 can display it as "Filled — remainder below minimum closed".
+
+## Outcome (as built)
+
+### What was built
+- **Order EIP-712** (`app/chain/orders.py`): hand-rolled digest + `eth_account` payload, OpenZeppelin-equivalent signature rules (65 bytes, v 27/28, low s; EIP-2098 rejected). Foundry gained 4 order edge-case vectors (uints above 2^53 as decimal strings); `tests/unit/test_order_vectors.py` reproduces all 12 vectors byte for byte and is a named CI step; CI also fails on vector drift; the TS shared test reads string-or-number uints.
+- **Schema** (migration `0003`): `orders` (`seq` identity for strict time priority, `reserved_wh`, `cancel_type`, `cancel_pending`, CHECK `filled + reserved <= amount`), `trades` (market, buyer, seller, `external`), `settlements` (hashes, provisional/final price, quote used, raw tx, nonce, tx hash history, attempts), `pair_cooldowns`, `chain_events` (UNIQUE `tx_hash, log_index`), `indexer_blocks`, `indexer_state`.
+- **Pure core** (`app/matching/{rules,book,funding}.py`): contract-exact integer math, quote-band feasibility, price-time matching with self-trade skip and cooldowns, newest-first funding cancellation. Hypothesis properties.
+- **Services**: `matching/service.py` (accept / soft cancel), `matching/snapshot.py` (pinned-block funding), `matching/lifecycle.py` (every reservation transition), `matching/matcher.py`, `workers/{relayer,listener,sweeper,leader,trading}.py`, `chain/settle_errors.py` (revert classification), `trading/run.py`.
+- **API**: `POST/GET/DELETE /orders`, `GET /trades`, `GET /markets/{id}/{order-config,book,trades}`, `GET /admin/trading/state`, `POST /admin/trading/{pause,resume}`; Redis `orderbook:` / `trades:` / `user:` events after commit.
+- **Engine feed**: confirmed-only fill velocity, cancel-pending-aware bid volume, inventory source flips to open sells (tested end to end).
+- Demo script `make trade-demo`, `make trading`, compose `trading` profile, `.env.example`, ADR-008, ADR-004 addendum, docs.
+
+### Deviations from the plan above (all small, none change a contract)
+- DELETE on an order with reserved Wh always returns 200 with `cancel_pending: true` (owner change), not the 409 `nothing_to_cancel` first proposed.
+- The `unfunded:{maker}` Redis flag was not needed: the sweeper cancels the orders themselves, and the matcher lock-reads orders `FOR UPDATE`.
+- `SETTLE_CONFIRMATIONS` / `SETTLE_TX_TIMEOUT_SECONDS` were dropped: the relayer reads receipts for revert detection only; reorgs are handled by the listener rollback plus relayer re-send. `LISTENER_CONFIRMATIONS` default is 1 (Anvil); use 6 on Sepolia.
+- A mined revert whose reason cannot be replayed (the replay runs one block earlier and cannot see same-block effects or the block timestamp) is diagnosed from chain state (`enforce`) or inferred as `StaleQuote` from the block timestamp.
+- `unfunded_since` column not added.
+
+### How to verify
+```
+make lint-api                                   # ruff + mypy strict
+cd services/api && uv run pytest -q tests/unit  # includes the Foundry-vector gate
+REQUIRE_SERVICES=1 make test-integration        # Anvil + Postgres + Redis: trading, pricing, mint pipeline
+cd contracts && forge test                      # vectors regenerate-and-compare; contracts untouched
+make up && make deploy-local && make sim && make trade-demo
+```
+
+### Known limitations / tech debt
+- Off-chain cancel is not binding on-chain (documented, ADR-004 addendum); the UI must offer the on-chain cancel.
+- Funding/pre-flight reads are per maker with several RPC calls each; fine for demo scale, a multicall would be the next optimisation.
+- Cross-account wash trading is not prevented (testnet scope).
+- The relayer pipelines at most `SETTLE_MAX_IN_FLIGHT` settlements; no gas-price ceiling is configured.
+- `GET /markets/{id}/book` is polled; the WebSocket gateway (Phase 5) will forward the Redis events.
+- Reorgs deeper than `LISTENER_REORG_WINDOW` stop the listener with an error instead of guessing.
