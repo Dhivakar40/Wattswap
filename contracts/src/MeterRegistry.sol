@@ -10,6 +10,8 @@ import {IMeterRegistry} from "./interfaces/IMeterRegistry.sol";
 ///         hardware-agnostic: any device that can sign an EIP-712 Reading can be registered.
 contract MeterRegistry is AccessControl, IMeterRegistry {
     bytes32 public constant REGISTRAR_ROLE = keccak256("REGISTRAR_ROLE");
+    /// @notice Held by EnergyToken only: may record reading intervals during mint.
+    bytes32 public constant RECORDER_ROLE = keccak256("RECORDER_ROLE");
 
     uint256 public constant BPS = 10_000;
     uint256 public constant MAX_SAFETY_BPS = 20_000;
@@ -26,6 +28,11 @@ contract MeterRegistry is AccessControl, IMeterRegistry {
     }
 
     mapping(bytes32 meterId => Meter) private _meters;
+
+    /// @notice End (exclusive) of the latest interval minted for a meter; 0 before the first.
+    ///         Readings must start at or after this value, so intervals never overlap and are
+    ///         minted in order. Gaps are allowed; equal boundaries are allowed.
+    mapping(bytes32 meterId => uint256) public lastIntervalEnd;
 
     /// @notice Max plausible energy = capacity x interval x safetyBps / 10_000 (default 120%).
     uint256 public safetyBps = 12_000;
@@ -45,6 +52,7 @@ contract MeterRegistry is AccessControl, IMeterRegistry {
     );
     event MeterActiveSet(bytes32 indexed meterId, bool active);
     event MeterCapacityUpdated(bytes32 indexed meterId, uint32 oldCapacityW, uint32 newCapacityW);
+    event IntervalRecorded(bytes32 indexed meterId, uint256 intervalStart, uint256 intervalEnd);
     event PlausibilityUpdated(
         uint256 safetyBps, uint256 minIntervalSeconds, uint256 maxIntervalSeconds
     );
@@ -58,6 +66,7 @@ contract MeterRegistry is AccessControl, IMeterRegistry {
     error InvalidInterval(uint256 intervalSeconds);
     error ReadingImplausible(uint256 amountWh, uint256 maxWh);
     error InvalidPlausibilityConfig();
+    error IntervalOverlap(bytes32 meterId, uint256 intervalStart, uint256 lastIntervalEnd);
 
     constructor(address admin) {
         if (admin == address(0)) revert ZeroAddress();
@@ -141,18 +150,27 @@ contract MeterRegistry is AccessControl, IMeterRegistry {
     }
 
     /// @inheritdoc IMeterRegistry
-    function validateReading(bytes32 meterId, uint256 amountWh, uint256 intervalSeconds)
-        external
-        view
-        returns (address owner, address deviceSigner)
-    {
+    /// @dev Plausibility uses the reading's own `intervalSeconds`. `intervalSeconds >= 1` is
+    ///      guaranteed by `minIntervalSeconds >= 1`, so `intervalEnd > intervalStart` always holds.
+    function recordReading(
+        bytes32 meterId,
+        uint256 amountWh,
+        uint256 intervalStart,
+        uint256 intervalSeconds
+    ) external onlyRole(RECORDER_ROLE) returns (address owner, address deviceSigner) {
         Meter storage m = _requireMeter(meterId);
         if (!m.active) revert MeterInactive(meterId);
         if (intervalSeconds < minIntervalSeconds || intervalSeconds > maxIntervalSeconds) {
             revert InvalidInterval(intervalSeconds);
         }
+        uint256 last = lastIntervalEnd[meterId];
+        if (intervalStart < last) revert IntervalOverlap(meterId, intervalStart, last);
         uint256 maxWh = maxEnergyWh(m.ratedCapacityW, intervalSeconds);
         if (amountWh > maxWh) revert ReadingImplausible(amountWh, maxWh);
+
+        uint256 end = intervalStart + intervalSeconds;
+        lastIntervalEnd[meterId] = end;
+        emit IntervalRecorded(meterId, intervalStart, end);
         return (m.owner, m.deviceSigner);
     }
 

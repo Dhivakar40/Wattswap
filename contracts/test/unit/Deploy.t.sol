@@ -22,6 +22,8 @@ contract DeployTest is Test {
         assertTrue(d.watt.hasRole(d.watt.MINTER_ROLE(), deployer));
         assertTrue(d.oracle.hasRole(d.oracle.PRICER_ROLE(), deployer));
         assertTrue(d.registry.hasRole(d.registry.REGISTRAR_ROLE(), deployer));
+        assertTrue(d.registry.hasRole(d.registry.RECORDER_ROLE(), address(d.watt)));
+        assertFalse(d.registry.hasRole(d.registry.RECORDER_ROLE(), deployer));
         assertTrue(d.exchange.marketEnabled(script.WATT_MUSDC_MARKET()));
         assertEq(d.exchange.feeBps(), 100);
         assertEq(d.exchange.bandBps(), 500);
