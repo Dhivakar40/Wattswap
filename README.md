@@ -9,7 +9,7 @@ Core ideas: signed meter readings mint an energy token (WATT, 3 decimals, 1.000 
 engine re-prices the market from live weather and order-book pressure; trades settle atomically in one
 contract call; prices, order book and trades stream to the browser over WebSockets.
 
-**Status:** Phase 0 (scaffold). Contracts, pricing, trading and the full UI arrive in Phases 1-8
+**Status:** Phase 1 (smart contracts). Pricing, trading and the full UI arrive in Phases 2-8
 (see [CLAUDE.md](CLAUDE.md) for the roadmap and [docs/architecture.md](docs/architecture.md) for the diagram).
 
 ## Architecture
@@ -50,7 +50,20 @@ Then open:
 | `make test` | All tests (contracts, api, meter-sim, shared, web) |
 | `make lint` | Lint, typecheck and format checks for everything |
 | `make fmt` | Auto-format everything |
+| `make test-contracts-ci` | Contract tests with the heavy fuzz/invariant profile |
+| `make coverage-contracts` | Fail if `contracts/src` line coverage < 95% |
+| `make slither` | Slither static analysis (fails on medium/high) |
+| `make deploy-local` | Deploy all contracts to local Anvil, export ABIs + addresses to `packages/shared` |
+| `make export-abis` | Re-export ABIs/addresses to `packages/shared` |
+| `make gen-vectors` | Regenerate shared EIP-712 test vectors (`packages/shared/vectors/eip712.json`) |
 | `make test-<area>` / `make lint-<area>` | One of `contracts`, `api`, `meter-sim`, `shared`, `web` |
+
+## Smart contracts
+
+`EnergyToken` (WATT), `MeterRegistry`, `PriceOracle`, `MockUSDC` (testnet only) and `WattSwapExchange`.
+Settlement and the signed order formats are explained in [docs/settlement.md](docs/settlement.md); security
+analysis in [docs/threat-model.md](docs/threat-model.md). Local flow: `make up`, then `make deploy-local`.
+`@wattswap/shared` exports typed ABIs and per-chain addresses; Sepolia addresses arrive in Phase 8.
 
 ## Environment variables
 
