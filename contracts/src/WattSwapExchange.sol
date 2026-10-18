@@ -143,16 +143,21 @@ contract WattSwapExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
     ) private {
         uint256 cost = fill * execPrice / WH_PER_KWH;
         if (cost == 0) revert DustFill();
-        uint256 fee = cost * feeBps / BPS;
+        // slither-disable-next-line divide-before-multiply
+        uint256 fee = cost * feeBps / BPS; // intentional: floor(cost) then floor(fee); see docs/settlement.md
 
         // effects
         filled[buyHash] += fill;
         filled[sellHash] += fill;
 
         // interactions: both legs in this single transaction
+        // `seller`/`buyer` are the makers whose valid EIP-712 signatures were verified in
+        // _verifyOrder; the signed order is their authorization to be debited (docs/threat-model.md T-1).
+        // slither-disable-start arbitrary-send-erc20
         watt.safeTransferFrom(seller, buyer, fill);
         usdc.safeTransferFrom(buyer, seller, cost - fee);
         if (fee != 0) usdc.safeTransferFrom(buyer, treasury, fee);
+        // slither-disable-end arbitrary-send-erc20
 
         emit TradeSettled(marketId, buyHash, sellHash, buyer, seller, fill, execPrice, cost, fee);
     }
@@ -203,6 +208,7 @@ contract WattSwapExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
         uint256 maxStale = oracle.maxStaleness();
         if (block.timestamp - q.timestamp > maxStale) revert StaleQuote(q.timestamp, maxStale);
 
+        // slither-disable-next-line unused-return
         (address signer, ECDSA.RecoverError err,) =
             ECDSA.tryRecover(_hashTypedDataV4(OrderLib.quoteHash(q)), sig);
         if (err != ECDSA.RecoverError.NoError || !oracle.hasRole(oracle.PRICER_ROLE(), signer)) {

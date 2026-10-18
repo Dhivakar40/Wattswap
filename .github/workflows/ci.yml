@@ -20,7 +20,22 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.8.5
-      - run: make lint-contracts test-contracts
+      - uses: astral-sh/setup-uv@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: make lint-contracts test-contracts-ci
+      - name: Coverage gate (>= 95% lines on contracts/src)
+        run: make coverage-contracts
+      - name: Slither (fails on medium/high)
+        run: uv tool install slither-analyzer && make slither
+      - name: Committed ABIs match the contracts
+        run: |
+          make export-abis-only
+          git diff --exit-code packages/shared/src/abis
 
   api:
     runs-on: ubuntu-latest
