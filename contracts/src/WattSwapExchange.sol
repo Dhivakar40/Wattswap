@@ -188,8 +188,8 @@ contract WattSwapExchange is AccessControl, Pausable, ReentrancyGuard, EIP712 {
         if (!SignatureChecker.isValidSignatureNow(o.maker, h, sig)) {
             revert InvalidOrderSignature(h);
         }
-        uint256 remaining = o.amountWh - filled[h];
-        if (fill > remaining) revert Overfill(h, remaining, fill);
+        uint256 left = o.amountWh - filled[h];
+        if (fill > left) revert Overfill(h, left, fill);
     }
 
     function _checkQuote(

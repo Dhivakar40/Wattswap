@@ -24,3 +24,11 @@ runs = 256
 [invariant]
 runs = 64
 depth = 32
+
+[profile.ci.fuzz]
+runs = 2048
+
+[profile.ci.invariant]
+runs = 256
+depth = 64
+fail_on_revert = false
