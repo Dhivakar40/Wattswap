@@ -82,6 +82,22 @@ Residual risks for this phase: the dev role keys are plain environment variables
 EIP-1271 device wallets are verified on-chain but not at ingest; the simulator signs whatever its model says, which
 is by design for a labeled demo.
 
+## Pricing engine (Phase 3)
+
+| # | Threat | Mitigation | Evidence |
+|---|---|---|---|
+| P-1 | Malformed, hostile or absurd weather data | Strict validation (shape, lengths, finiteness, ranges); an unusable response is a failure; invalid hours skipped | `test_weather.py` (parse and malformed cases) |
+| P-2 | Weather outage or rate limiting silently freezes or distorts prices | Last-good fallback with its real age; stale > 30 min freezes the applied price; `Retry-After` honoured; exponential backoff with jitter; request volume independent of meter count | respx failure-mode tests, `test_stale_weather_trips_the_breaker_*` |
+| P-3 | A price shock or manipulation moves the market unnoticed | Raw-move anomaly: widened band hint, stored event, metric; the applied price is rate-limited (0.25 %/tick) and the limiter can never reach the breaker threshold | `test_limiter_alone_can_never_reach_*`, day-trace tests |
+| P-4 | Quote from the future or too old is rejected on-chain, halting settlement | Quote timestamps come from the chain-anchored clock, never the (possibly simulated) market clock; refreshed every tick | `test_a_quote_stamped_with_the_simulated_clock_would_be_stale_on_chain`, exchange rejection tests |
+| P-5 | Float rounding in prices that are signed or sent on-chain | Decimal arithmetic; integer output; `PriceQuote` rejects non-int; parameter API rejects JSON floats | `test_a_quote_price_must_be_a_positive_plain_int`, `test_prices_and_money_are_integers_*` |
+| P-6 | Compromised pricer key | Distinct key (boot refuses shared role keys); impact bounded by the on-chain band, `maxStaleness` and role revocation; production would use a KMS/HSM | ADR-006, exchange quote tests |
+| P-7 | Admin sets unsafe parameters | Bounds on every parameter; cross-parameter rules (floor < base < ceiling, limiter vs breaker); role-gated; append-only audit log; atomic validation | `test_invalid_updates_are_rejected_atomically`, audit test |
+| P-8 | Two engines quote or push at once | Redis leader lock; per-key nonce lock for the pricer; unique (market, ts) ticks; restart restores state from persisted ticks | `test_only_one_instance_prices_at_a_time`, restart test |
+| P-9 | Oracle push failure stalls pricing or spams the chain | Push is a separate loop with backoff (never blocks ticks); threshold + heartbeat + minimum interval | oracle pusher tests |
+| P-10 | Start-up race creates duplicate markets | Idempotent `INSERT .. ON CONFLICT DO NOTHING` | `test_concurrent_start_up_creates_the_default_market_exactly_once` |
+| P-11 | Wash trading or spoofed bids move the price | Out of scope until the order book exists (Phase 4); bids and fills enter demand with bounded weights and are clamped by the ratio cap | model tests |
+
 ## Known limitations / out of scope for Phase 1
 
 - No third-party audit. Do not deploy with real value.

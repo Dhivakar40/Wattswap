@@ -28,6 +28,10 @@ EXPECTED_TABLES = {
     "trades",
     "price_ticks",
     "settlements",
+    "markets",
+    "pricing_params",
+    "pricing_param_changes",
+    "pricing_events",
 }
 
 

@@ -218,7 +218,11 @@ def make_settings(migrated_db: str, redis_ok: str, chain: dict[str, str]) -> Set
             "registrar_private_key": SecretStr(KEY_REGISTRAR),
             "energy_token_address": chain["EnergyToken"],
             "meter_registry_address": chain["MeterRegistry"],
+            "exchange_address": chain["WattSwapExchange"],
+            "price_oracle_address": chain["PriceOracle"],
+            "pricer_private_key": SecretStr(KEY_PRICER),
             "mint_worker_enabled": False,  # tests drive the worker explicitly unless they opt in
+            "pricing_enabled": False,  # ... and the pricing service likewise
             "mint_poll_seconds": 0.2,
             "mint_tx_timeout_seconds": 20.0,
             "rate_limit_ip": 10_000,

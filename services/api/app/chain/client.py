@@ -41,7 +41,17 @@ class ChainClient:
         self.registry: AsyncContract = self.w3.eth.contract(
             address=self.registry_address, abi=registry_abi
         )
-        self.decoder = RevertDecoder([token_abi, registry_abi])
+        exchange_abi = settings.load_abi("WattSwapExchange")
+        oracle_abi = settings.load_abi("PriceOracle")
+        self.exchange_address = to_checksum_address(settings.contract_address("WattSwapExchange"))
+        self.oracle_address = to_checksum_address(settings.contract_address("PriceOracle"))
+        self.exchange: AsyncContract = self.w3.eth.contract(
+            address=self.exchange_address, abi=exchange_abi
+        )
+        self.oracle: AsyncContract = self.w3.eth.contract(
+            address=self.oracle_address, abi=oracle_abi
+        )
+        self.decoder = RevertDecoder([token_abi, registry_abi, exchange_abi, oracle_abi])
         self._params: PlausibilityParams | None = None
         self._params_at = 0.0
 
@@ -71,6 +81,20 @@ class ChainClient:
 
     async def last_interval_end(self, meter_id: str) -> int:
         return int(await self.registry.functions.lastIntervalEnd(meter_id).call())
+
+    async def onchain_band_bps(self) -> int:
+        return int(await self.exchange.functions.bandBps().call())
+
+    async def oracle_latest(self) -> tuple[int, int] | None:
+        """(price, timestamp) of the oracle, or None if it has never been updated."""
+        try:
+            price, ts = await self.oracle.functions.latest().call()
+        except ContractLogicError:  # NoPrice()
+            return None
+        return int(price), int(ts)
+
+    async def balance_of(self, address: str) -> int:
+        return int(await self.token.functions.balanceOf(to_checksum_address(address)).call())
 
     async def latest_block_timestamp(self) -> int:
         block = await self.w3.eth.get_block("latest")
@@ -114,6 +138,10 @@ class ChainClient:
             problems.append(f"registrar {roles['registrar']} lacks REGISTRAR_ROLE on MeterRegistry")
         if not await self.registry.functions.hasRole(recorder_role, self.token_address).call():
             problems.append("EnergyToken lacks RECORDER_ROLE on MeterRegistry")
+        if "pricer" in roles:
+            pricer_role = await self.oracle.functions.PRICER_ROLE().call()
+            if not await self.oracle.functions.hasRole(pricer_role, roles["pricer"]).call():
+                problems.append(f"pricer {roles['pricer']} lacks PRICER_ROLE on PriceOracle")
         return problems
 
     async def close(self) -> None:

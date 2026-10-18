@@ -236,3 +236,16 @@ def test_meter_id_derivation_and_coordinate_scaling() -> None:
     assert len(a) == 66
     assert to_e6(13.0827) == 13_082_700 and to_e6(-33.8688) == -33_868_800
     assert to_e6(80.2707) == 80_270_700 and to_e6(0.1 + 0.2) == 300_000  # no float drift
+
+
+def test_a_tick_rate_that_makes_the_limiter_unsafe_refuses_to_boot() -> None:
+    assert settings(pricing_tick_seconds=15).pricing_tick_seconds == 15
+    assert settings(pricing_tick_seconds=60).pricing_tick_seconds == 60
+    for bad in (
+        1,
+        5,
+    ):  # 25 bps/tick over a 600 s window would let the limiter itself look like an anomaly
+        with pytest.raises(ConfigError, match="inconsistent with the default pricing parameters"):
+            settings(pricing_tick_seconds=bad)
+    # switching pricing off skips the check (the engine is not running)
+    assert settings(pricing_tick_seconds=1, pricing_enabled=False).pricing_enabled is False

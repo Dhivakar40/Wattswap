@@ -23,7 +23,7 @@ endif
         test-contracts test-api test-meter-sim test-web test-shared \
         lint-contracts lint-api lint-meter-sim lint-web lint-shared \
         coverage-contracts slither export-abis deploy-local gen-vectors test-contracts-ci \
-        migrate sim-provision sim test-integration
+        migrate sim-provision sim test-integration pricing backtest
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -80,6 +80,11 @@ $(SIM_DIR)/meters.json:
 sim: $(SIM_DIR)/meters.json ## Run the SIMULATED meter in accelerated DEMO mode (1 interval / 20 s); provisions once
 
 	cd services/meter-sim && uv run python -m meter_sim run --api http://localhost:$${API_PORT:-8000} 	  --config runtime/meters.json --demo --demo-seconds 20
+
+pricing: ## Run the pricing engine as its own process (set PRICING_EMBEDDED=false on the API)
+	cd services/api && uv run python -m app.pricing.run
+backtest: ## Replay the engine over history: make backtest ARGS="--lat 13.08 --lon 80.27 --from 2026-06-01 --to 2026-06-07"
+	cd services/api && uv run python -m app.pricing.backtest $(ARGS)
 
 up: env ## Build and start postgres, redis, anvil, api, web
 	$(COMPOSE) up -d --build --wait
