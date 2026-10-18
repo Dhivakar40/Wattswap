@@ -45,11 +45,12 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105"]
+"tests/**" = ["S101", "S105", "S311", "ANN401"]
 
 [tool.mypy]
 strict = true
 python_version = "3.12"
+mypy_path = "../meter-sim"
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
@@ -58,11 +59,17 @@ module = ["eth_utils", "eth_utils.*", "eth_abi", "eth_abi.*", "hexbytes", "eth_a
 implicit_reexport = true
 
 [[tool.mypy.overrides]]
-module = ["siwe", "siwe.*"]
+module = ["siwe", "siwe.*", "asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "../meter-sim"]
+markers = ["integration: end-to-end pipeline against real Anvil, Postgres and Redis"]
+
+[tool.coverage.run]
+source = ["app"]
+# SQLAlchemy's async layer runs on greenlets; without this, awaited DB code is under-reported.
+concurrency = ["thread", "greenlet"]

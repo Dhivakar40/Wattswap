@@ -140,6 +140,30 @@ async def set_meter_active(
     await session.commit()
 
 
+async def rotate_device_signer(
+    session: AsyncSession, chain: ChainServices, settings: Settings, meter: Meter, new_signer: str
+) -> None:
+    _require_registrar(chain)
+    assert chain.registrar is not None
+    if meter.register_status != RegisterStatus.CONFIRMED:
+        raise AppError(409, "meter_not_registered", "meter is not registered on-chain")
+    if meter.device_signer == new_signer:
+        return
+    fn = chain.client.registry.functions.rotateDeviceSigner(
+        meter.meter_id, to_checksum_address(new_signer)
+    )
+    try:
+        await chain.registrar.send_and_wait(
+            fn, settings.mint_tx_timeout_seconds, settings.mint_confirmations
+        )
+    except (TxRevertedError, TimeoutError) as exc:
+        raise AppError(
+            502, "chain_error", "on-chain update failed", {"reason": str(exc)[:500]}
+        ) from exc
+    meter.device_signer = new_signer
+    await session.commit()
+
+
 async def get_owned_meter(session: AsyncSession, user: User, meter_ref: str) -> tuple[Meter, str]:
     """Meter by uuid or bytes32 id, only if the user owns it (admins can see all).
 

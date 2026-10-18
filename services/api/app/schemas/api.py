@@ -42,6 +42,8 @@ class MeterCreate(_Strict):
 class MeterPatch(_Strict):
     label: str | None = Field(default=None, min_length=1, max_length=80)
     active: bool | None = None
+    # Rotate the device key (e.g. a lost or compromised device). Old signatures stop working.
+    device_signer: EthAddress | None = None
 
 
 class MeterOut(BaseModel):

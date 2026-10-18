@@ -14,6 +14,7 @@ from app.services.meters import (
     meter_out,
     minted_wh_for,
     register_meter,
+    rotate_device_signer,
     set_meter_active,
 )
 from app.services.readings import reading_out
@@ -63,6 +64,8 @@ async def patch_meter(
         await session.commit()
     if body.active is not None:
         await set_meter_active(session, chain, settings, meter, body.active)
+    if body.device_signer is not None:
+        await rotate_device_signer(session, chain, settings, meter, body.device_signer)
     minted = await minted_wh_for(session, [meter.id])
     return meter_out(meter, owner, minted.get(meter.id, 0))
 
