@@ -64,6 +64,22 @@ services:
       PRICING_TICK_SECONDS: ${PRICING_TICK_SECONDS:-15}
       WEATHER_POLL_SECONDS: ${WEATHER_POLL_SECONDS:-600}
       PRICING_CLOCK_MODE: ${PRICING_CLOCK_MODE:-real}
+      TRADING_ENABLED: ${TRADING_ENABLED:-true}
+      TRADING_EMBEDDED: ${TRADING_EMBEDDED:-true}
+      MIN_ORDER_WH: ${MIN_ORDER_WH:-100}
+      MIN_FILL_WH: ${MIN_FILL_WH:-100}
+      MIN_FILL_COST: ${MIN_FILL_COST:-1000}
+      RATE_LIMIT_ORDERS: ${RATE_LIMIT_ORDERS:-30}
+      MAX_OPEN_ORDERS_PER_MAKER: ${MAX_OPEN_ORDERS_PER_MAKER:-50}
+      QUOTE_SAFETY_MARGIN_SECONDS: ${QUOTE_SAFETY_MARGIN_SECONDS:-60}
+      BAND_SAFETY_PCT: ${BAND_SAFETY_PCT:-90}
+      SETTLE_CONFIRMATIONS: ${SETTLE_CONFIRMATIONS:-1}
+      SETTLE_MAX_IN_FLIGHT: ${SETTLE_MAX_IN_FLIGHT:-4}
+      SETTLE_BUMP_AFTER_SECONDS: ${SETTLE_BUMP_AFTER_SECONDS:-20}
+      PAIR_COOLDOWN_SECONDS: ${PAIR_COOLDOWN_SECONDS:-30}
+      FUNDING_SWEEP_SECONDS: ${FUNDING_SWEEP_SECONDS:-20}
+      LISTENER_CONFIRMATIONS: ${LISTENER_CONFIRMATIONS:-1}
+      LISTENER_START_BLOCK: ${LISTENER_START_BLOCK:-0}
       # Role keys. Each must be a DIFFERENT address or the API refuses to start.
       ORACLE_PRIVATE_KEY: ${ORACLE_PRIVATE_KEY:?set ORACLE_PRIVATE_KEY in .env}
       REGISTRAR_PRIVATE_KEY: ${REGISTRAR_PRIVATE_KEY:?set REGISTRAR_PRIVATE_KEY in .env}
@@ -103,6 +119,28 @@ services:
       PRICING_TICK_SECONDS: ${PRICING_TICK_SECONDS:-15}
       WEATHER_POLL_SECONDS: ${WEATHER_POLL_SECONDS:-600}
       PRICING_CLOCK_MODE: ${PRICING_CLOCK_MODE:-real}
+    depends_on:
+      api: { condition: service_healthy }
+
+  # The trading workers (matcher, relayer, listener, sweeper) as their own process. Opt-in: set
+  # TRADING_EMBEDDED=false in .env so the API does not also run them, then
+  # `docker compose --profile trading up -d trading`. Redis leader locks make it safe to run several.
+  trading:
+    profiles: ["trading"]
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    command: ["python", "-m", "app.trading.run"]
+    environment:
+      API_ENV: ${API_ENV:-development}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wattswap}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wattswap}
+      REDIS_URL: redis://redis:6379/0
+      RPC_URL: http://anvil:8545
+      CHAIN_ID: ${CHAIN_ID:-31337}
+      RELAYER_PRIVATE_KEY: ${RELAYER_PRIVATE_KEY:?set RELAYER_PRIVATE_KEY in .env}
+      SETTLE_CONFIRMATIONS: ${SETTLE_CONFIRMATIONS:-1}
+      LISTENER_CONFIRMATIONS: ${LISTENER_CONFIRMATIONS:-1}
+      LISTENER_START_BLOCK: ${LISTENER_START_BLOCK:-0}
     depends_on:
       api: { condition: service_healthy }
 

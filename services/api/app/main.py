@@ -21,7 +21,16 @@ from app.core.logging import configure_logging, request_id_ctx
 from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
 from app.core.state import ChainServices
 from app.pricing.factory import PricingBundle, build_pricing
-from app.routers import admin_pricing, auth, markets, meters, orders, readings, system
+from app.routers import (
+    admin_pricing,
+    admin_trading,
+    auth,
+    markets,
+    meters,
+    orders,
+    readings,
+    system,
+)
 from app.workers.mint_worker import MintWorker
 from app.workers.trading import TradingBundle, build_trading, validate
 
@@ -171,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(markets.router)
     api_v1.include_router(orders.router)
     api_v1.include_router(admin_pricing.router)
+    api_v1.include_router(admin_trading.router)
     api_v1.include_router(system.config_router)
     app.include_router(system.system_router)
     app.include_router(api_v1)
