@@ -206,7 +206,11 @@ async def test_relayer_crash_after_signing_resends_the_same_tx_exactly_once(
         await restarted.relayer.run_once()
         (st,) = await settlements(h)
         assert st.raw_tx == raw and st.tx_hashes == [tx_hash]  # the SAME signed tx, not a new one
-        assert relayer_nonce(h, c) == nonce + 1
+
+        async def mined() -> bool:  # Anvil produces the automine block asynchronously
+            return relayer_nonce(h, c) == nonce + 1
+
+        await wait_until(mined, within=10)
         await settle_all(restarted, c)
         (st,) = await settlements(h)
         assert st.status == SettlementStatus.CONFIRMED and len(await trades(h)) == 1
