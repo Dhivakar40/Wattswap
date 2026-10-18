@@ -54,7 +54,7 @@ export-abis-only: contracts-deps ## Rebuild contracts and export ABIs only
 	pnpm --filter @wattswap/shared exec node scripts/export-abis.mjs --abis-only
 deploy-local: contracts-deps ## Deploy to local Anvil and export ABIs/addresses
 	cd contracts && $(FORGE) build
-	cd contracts && PRIVATE_KEY=$$(cast wallet private-key "test test test test test test test test test test test junk" --mnemonic-index 0) 	  RELAYER_ADDRESS=$$(cast wallet address --private-key $$(grep ^RELAYER_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  MINTER_ADDRESS=$$(cast wallet address --private-key $$(grep ^ORACLE_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  PRICER_ADDRESS=$$(cast wallet address --private-key $$(grep ^PRICER_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  $(FORGE) script script/Deploy.s.sol --rpc-url $(ANVIL_RPC) --broadcast
+	cd contracts && PRIVATE_KEY=$$(cast wallet private-key "test test test test test test test test test test test junk" --mnemonic-index 0) 	  RELAYER_ADDRESS=$$(cast wallet address --private-key $$(grep ^RELAYER_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  MINTER_ADDRESS=$$(cast wallet address --private-key $$(grep ^ORACLE_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  REGISTRAR_ADDRESS=$$(cast wallet address --private-key $$(grep ^REGISTRAR_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  PRICER_ADDRESS=$$(cast wallet address --private-key $$(grep ^PRICER_PRIVATE_KEY ../.env.example | cut -d= -f2)) 	  $(FORGE) script script/Deploy.s.sol --rpc-url $(ANVIL_RPC) --broadcast
 	$(MAKE) export-abis
 # deploy-sepolia: requires PRIVATE_KEY and SEPOLIA_RPC_URL in the environment (see .env.example).
 .PHONY: deploy-sepolia
