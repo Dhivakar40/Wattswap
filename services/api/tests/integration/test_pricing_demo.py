@@ -23,8 +23,9 @@ from meter_sim.device import MeterSpec, SimulatedMeter
 from meter_sim.model import GenerationModel, GenerationParams
 from meter_sim.runner import RunConfig, run
 from meter_sim.weather import NoWeather
+from sqlalchemy import select
 
-from app.models import MintStatus
+from app.models import MintStatus, PriceTick
 from app.pricing import publish
 from app.pricing.engine import Tick
 from app.pricing.repo import DEFAULT_MARKET_ID
@@ -170,8 +171,17 @@ async def test_prices_move_while_the_simulator_runs_accelerated(
         for a, b in pairwise(ticks):
             assert abs(b.price - a.price) * 10_000 <= a.price * 25
 
-        # quotes stayed on the real (chain) clock throughout, and the Redis feed shows the demo
+        # quotes stayed on the real (chain) clock throughout, while the ticks recorded the demo clock.
+        # (The last published tick may already be back on real time if the slow runner let the
+        # follow window lapse, so assert on the persisted history, which is timing-independent.)
         wire = json.loads(await h.app.state.redis.get(publish.latest_key(MID)))["data"]
         assert wire["quote"]["timestamp"] >= int(clock.t) - 120
-        assert wire["accelerated"] is True or ticks[-1].market_time >= int(clock.t) - 60
-        assert wire["clockMode"] == "follow_readings"
+        async with h.app.state.sessionmaker() as s:
+            demo_rows = (
+                await s.scalars(select(PriceTick).where(PriceTick.clock_mode == "follow_readings"))
+            ).all()
+        assert len(demo_rows) >= len(followed)
+        assert all(
+            r.quote_timestamp is not None and r.quote_timestamp > r.market_time + 3600
+            for r in demo_rows
+        )
