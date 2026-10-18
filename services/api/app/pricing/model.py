@@ -110,7 +110,8 @@ def supply_terms(inputs: MarketInputs, p: PricingParams) -> SupplyTerms:
 # --------------------------------------------------------------------------- demand side
 @dataclass(frozen=True)
 class DemandTerms:
-    load_kw: Decimal  # profile-driven baseline
+    load_kw: Decimal  # profile-driven baseline (scaled installed capacity + base demand)
+    base_kw: Decimal  # the part of load_kw that does not depend on installed capacity
     bids_kw: Decimal  # open bid volume spread over the bid horizon
     velocity_kw: Decimal  # recent fills, weighted
     demand_kw: Decimal  # D
@@ -131,11 +132,19 @@ def demand_terms(inputs: MarketInputs, p: PricingParams) -> DemandTerms:
         weighted_mult += mult * cap_kw
         weighted_hour += hour * cap_kw
         installed += cap_kw
+    mult_mean = (
+        weighted_mult / installed
+        if installed > 0
+        else load_multiplier(p.load_profile, local_solar_hour(inputs.market_time, 0))
+    )
+    hour_mean = (
+        weighted_hour / installed if installed > 0 else local_solar_hour(inputs.market_time, 0)
+    )
+    base = p.base_demand_kw * mult_mean
+    load += base
     bids = D(inputs.open_bid_wh) / THOUSAND / p.bid_horizon_hours
     velocity = p.velocity_weight * D(inputs.recent_fill_wh) / THOUSAND / p.velocity_window_hours
-    mult_mean = weighted_mult / installed if installed > 0 else ZERO
-    hour_mean = weighted_hour / installed if installed > 0 else ZERO
-    return DemandTerms(load, bids, velocity, load + bids + velocity, mult_mean, hour_mean)
+    return DemandTerms(load, base, bids, velocity, load + bids + velocity, mult_mean, hour_mean)
 
 
 # ------------------------------------------------------------------------------ raw price

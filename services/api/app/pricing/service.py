@@ -132,7 +132,7 @@ class PricingService:
         return self.markets.setdefault(market_id, MarketRuntime())
 
     async def _params(self, s: AsyncSession, market_id: str, rt: MarketRuntime) -> PricingParams:
-        now = time.monotonic()
+        now = self._wall()
         if rt.params is None or now - rt.params_at > PARAMS_TTL_S:
             rt.params = await repo.effective_params(
                 s, market_id, self.settings.pricing_tick_seconds
@@ -143,7 +143,7 @@ class PricingService:
     async def _onchain_band(self, rt: MarketRuntime) -> int:
         if self.chain is None:
             return rt.band
-        now = time.monotonic()
+        now = self._wall()
         if now - rt.band_at > BAND_TTL_S:
             try:
                 rt.band = await self.chain.onchain_band_bps()
@@ -181,11 +181,11 @@ class PricingService:
         for owner in sorted(owners):
             cached = self._balances.get(owner)
             fresh = cached is not None and (
-                time.monotonic() - cached[1] < self.settings.pricing_inventory_refresh_seconds
+                self._wall() - cached[1] < self.settings.pricing_inventory_refresh_seconds
             )
             if not fresh:
                 try:
-                    self._balances[owner] = (await self.chain.balance_of(owner), time.monotonic())
+                    self._balances[owner] = (await self.chain.balance_of(owner), self._wall())
                 except Exception as exc:
                     log.warning("balanceOf(%s) failed (%s)", owner, exc)
                     if cached is None:  # no value at all: fall back for the whole market
@@ -224,6 +224,7 @@ class PricingService:
     # ------------------------------------------------------------------ weather
     async def poll_weather_once(self) -> str:
         async with self.sessionmaker() as s:
+            await repo.ensure_default_market(s)
             cells = {
                 mc.cell
                 for m in await repo.list_markets(s, enabled_only=True)
@@ -325,9 +326,9 @@ class PricingService:
         clock_mode: str,
     ) -> None:
         """Hourly supply/demand/raw-price outlook for the next 24 h, cached in Redis for the API."""
-        if time.monotonic() - rt.forecast_at < FORECAST_EVERY_S:
+        if self._wall() - rt.forecast_at < FORECAST_EVERY_S:
             return
-        rt.forecast_at = time.monotonic()
+        rt.forecast_at = self._wall()
         start = now_inputs.market_time - now_inputs.market_time % 3600
         hours: list[dict[str, Any]] = []
         for h in range(24):

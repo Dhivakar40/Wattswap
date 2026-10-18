@@ -36,7 +36,9 @@ def test_defaults_are_the_approved_ones() -> None:
 def test_overrides_apply_and_roundtrip() -> None:
     q = from_mapping({"p_base": 160_000, "epsilon": "0.5", "halt_quotes_on_freeze": True})
     assert q.p_base == 160_000 and q.epsilon == D("0.5") and q.halt_quotes_on_freeze
-    assert from_mapping(q.to_mapping()) == q  # to_mapping is lossless
+    assert PricingParams().with_overrides(q.to_mapping()) == q  # to_mapping is lossless
+    with pytest.raises(ParamError):
+        from_mapping({"tick_seconds": 5})  # read-only through the admin path
 
 
 @pytest.mark.parametrize(

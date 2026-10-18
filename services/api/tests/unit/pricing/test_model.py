@@ -130,6 +130,30 @@ def test_demand_bids_and_velocity() -> None:
     assert d.demand_kw == D("0.9625") + 8
 
 
+def test_base_demand_does_not_scale_with_installed_capacity() -> None:
+    # 2 kW of consumer demand x the 0.55 midnight multiplier = 1.1 kW on top of 0.9625 kW
+    p = PricingParams(base_demand_kw=D(2))
+    d = demand_terms(inputs(cell()), p)
+    assert d.base_kw == D("1.1") and d.load_kw == D("0.9625") + D("1.1")
+    # doubling the installed base doubles the proportional part only
+    d2 = demand_terms(inputs(cell(10_000)), p)
+    assert d2.base_kw == D("1.1") and d2.load_kw == D("1.925") + D("1.1")
+    # with no meters at all the base demand is still there (at local solar time of lon 0)
+    assert demand_terms(inputs(), p).demand_kw == D("1.1")
+
+
+def test_without_base_demand_added_meters_leave_the_raw_price_unchanged() -> None:
+    """Documented property of the default model: demand and generation both scale with capacity."""
+
+    def raw(cap_w: int, p: PricingParams) -> int:
+        i = inputs(cell(cap_w, ghi="800", temp="30"))
+        return raw_price(supply_terms(i, p), demand_terms(i, p), p).price
+
+    assert raw(5_000, P) == raw(50_000, P)
+    with_base = PricingParams(base_demand_kw=D(2))
+    assert raw(50_000, with_base) < raw(5_000, with_base)  # more supply, same consumers: cheaper
+
+
 def test_demand_uses_each_cells_local_time() -> None:
     # Same UTC instant (00:00): a cell at 0 deg is at local midnight (0.55);
     # a cell at 180 deg is at local noon (0.70). Equal capacities.
