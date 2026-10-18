@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     energy_token_address: str | None = None
     meter_registry_address: str | None = None
     exchange_address: str | None = None
+    usdc_address: str | None = None
     price_oracle_address: str | None = None
 
     # --- meter pipeline -----------------------------------------------------------------
@@ -121,7 +122,8 @@ class Settings(BaseSettings):
     pair_cooldown_seconds: int = Field(default=30, ge=1)
     pair_cooldown_max_seconds: int = Field(default=600, ge=1)
     funding_sweep_seconds: float = Field(default=20.0, gt=0)
-    listener_confirmations: int = Field(default=2, ge=1)
+    listener_confirmations: int = Field(default=1, ge=1)  # use 6 on Sepolia
+    listener_start_block: int = Field(default=0, ge=0)  # set to the deploy block on Sepolia
     listener_reorg_window: int = Field(default=64, ge=2)
     listener_batch_blocks: int = Field(default=500, ge=1)
     listener_poll_seconds: float = Field(default=1.0, gt=0)
@@ -199,6 +201,7 @@ class Settings(BaseSettings):
             "EnergyToken": self.energy_token_address,
             "MeterRegistry": self.meter_registry_address,
             "WattSwapExchange": self.exchange_address,
+            "MockUSDC": self.usdc_address,
             "PriceOracle": self.price_oracle_address,
         }.get(name)
         if override:

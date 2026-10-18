@@ -21,8 +21,9 @@ from app.core.logging import configure_logging, request_id_ctx
 from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
 from app.core.state import ChainServices
 from app.pricing.factory import PricingBundle, build_pricing
-from app.routers import admin_pricing, auth, markets, meters, readings, system
+from app.routers import admin_pricing, auth, markets, meters, orders, readings, system
 from app.workers.mint_worker import MintWorker
+from app.workers.trading import TradingBundle, build_trading, validate
 
 log = logging.getLogger("wattswap.api")
 
@@ -94,11 +95,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
             app.state.pricing = pricing.service
             pricing_task = asyncio.create_task(pricing.service.run(stop), name="pricing")
+        trading: TradingBundle | None = None
+        trading_task: asyncio.Task[None] | None = None
+        if (
+            settings.trading_enabled
+            and settings.trading_embedded
+            and chain is not None
+            and settings.relayer_private_key is not None
+        ):
+            trading = build_trading(settings, app.state.sessionmaker, redis, chain.client)
+            trading_problems = await validate(
+                settings, chain.client, trading.relayer.sender.address
+            )
+            for problem in trading_problems:
+                log.error("trading config check failed: %s", problem)
+            if trading_problems and settings.api_env == "production":
+                raise ConfigError("; ".join(trading_problems))
+            if not trading_problems:
+                trading_task = asyncio.create_task(trading.run(stop), name="trading")
+            app.state.trading = trading
+        elif settings.trading_enabled and settings.trading_embedded:
+            log.warning("trading workers not started (no chain or RELAYER_PRIVATE_KEY)")
         try:
             yield
         finally:
             stop.set()
-            for task in (worker_task, pricing_task):
+            for task in (worker_task, pricing_task, trading_task):
                 if task is not None:
                     with contextlib.suppress(asyncio.CancelledError, Exception):
                         await asyncio.wait_for(task, timeout=10)
@@ -147,6 +169,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(meters.router)
     api_v1.include_router(readings.router)
     api_v1.include_router(markets.router)
+    api_v1.include_router(orders.router)
     api_v1.include_router(admin_pricing.router)
     api_v1.include_router(system.config_router)
     app.include_router(system.system_router)
