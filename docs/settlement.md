@@ -132,11 +132,49 @@ custom error and nothing moved. The backend (Phase 4) maps a revert to `failed` 
 
 ## Cancellation
 
-- `cancel(order)`: maker only; marks that order hash cancelled (`OrderCancelled`).
-- `cancelUpTo(n)`: maker only; strictly increasing; voids every order with `nonce < n` (`NonceFloorRaised`).
+- `cancel(order)`: maker only; marks that order hash cancelled (`OrderCancelled`). **Binding.**
+- `cancelUpTo(n)`: maker only; strictly increasing; voids every order with `nonce < n` (`NonceFloorRaised`). **Binding.**
+- `DELETE /api/v1/orders/{hash}`: removes the order from *our* book (`cancel_type: "offchain"`). Not binding:
+  the signature stays valid on-chain, which is safe only while `settle()` is relayer-gated (ADR-004 addendum).
+  With Wh already reserved by in-flight settlements it cancels only the unreserved remainder and marks the order
+  `cancel_pending`; the order is finalized as cancelled when those settlements resolve.
 
-Off-chain cancellation (removing from the book) is instant but not binding; only these on-chain calls stop a
-relayer that holds a signed order. Expiry bounds the exposure.
+Orders cancelled on-chain are reported as `cancel_type: "onchain"`; the UI can label them "Cancelled on-chain" and
+offer "Cancel on-chain (costs gas)" using the ABI fragments in `GET /markets/{id}/order-config`.
+
+## Off-chain order flow (Phase 4)
+
+```
+POST /orders -> verify (EIP-712 digest == exchange.hashOrder, OZ-equivalent signature rules, bounds)
+             -> funding check (balance AND allowance cover ALL the maker's open orders, one pinned block)
+             -> orders table
+matcher   (price-time priority; skips self-trade; price = clamp(reference, limits ∩ quote band))
+   -> trade + settlement(matched), Wh reserved on both orders
+relayer   (pre-flight: expiry, voided/unfunded -> cancel; FRESH quote; re-derive price)
+   -> settlement(submitted): raw signed tx persisted BEFORE broadcast; replaced at the same
+      nonce (fee bump + fresh quote) when stuck
+listener  (TradeSettled at depth N, idempotent by (txHash, logIndex), reorg rollback)
+   -> settlement(confirmed): filled_wh += fill, reserved_wh -= fill
+```
+
+Settlement states: `matched -> submitted -> confirmed | failed`. A failed settlement releases the reservation on
+both orders with a recorded reason; an order that caused the failure is removed with a `cancel_reason`
+(`on_chain_cancel`, `nonce_floor`, `unfunded:balance`, `unfunded:allowance`). Pairs released because no price fits
+go on an exponentially growing cooldown (default 30 s, doubling, capped at 600 s).
+
+### Minimum sizes
+
+Orders below `MIN_ORDER_WH` (100 Wh) are rejected. A fill must cost at least `MIN_FILL_COST` mUSDC base units
+(contract math: `fill * price // 1000`), so a `DustFill` revert never burns relayer gas. A leftover below
+`MIN_FILL_WH` after a partial fill is closed with `cancel_reason = "dust_remainder"` (shown to users as
+"Filled — remainder below minimum closed").
+
+### Signature rules
+
+Exactly 65 bytes, `v` in {27, 28}, low `s` (OpenZeppelin rejects high-s), recovered signer equals `maker`. EIP-2098
+64-byte compact signatures are valid on-chain but rejected by the API in v1. Makers with contract code are
+verified through ERC-1271 `isValidSignature`. Python reproduces every Foundry-generated vector byte for byte
+(`tests/unit/test_order_vectors.py`, CI-gated).
 
 ## Approvals the user must grant
 

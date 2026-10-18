@@ -28,6 +28,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make lint-contracts test-contracts-ci
+      - name: Shared EIP-712 vectors are exactly what the contracts produce
+        run: |
+          # Vectors.t.sol already fails on drift; this also fails if a regenerated file was not committed.
+          git diff --exit-code packages/shared/vectors
       - name: Coverage gate (100% lines on contracts/src)
         run: make coverage-contracts
       - name: Slither (fails on medium/high)
@@ -70,9 +74,11 @@ jobs:
       - name: Install Foundry libs (the tests run the real Deploy.s.sol on a fresh Anvil)
         run: make contracts-deps
       - run: make lint-api lint-meter-sim test-meter-sim
+      - name: Order EIP-712 gate (Python reproduces every Foundry vector, byte for byte)
+        run: cd services/api && uv run pytest -q tests/unit/test_order_vectors.py tests/unit/test_order_signatures.py
       - name: API unit + API + migration tests
         run: cd services/api && uv run pytest -q -m "not integration" --cov=app --cov-report=term
-      - name: End-to-end gate (simulated meter -> signed reading -> WATT minted on Anvil)
+      - name: End-to-end gates on Anvil (meter -> mint; pricing; order book -> match -> settle -> confirm)
         run: make test-integration
 
   web:

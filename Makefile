@@ -23,7 +23,7 @@ endif
         test-contracts test-api test-meter-sim test-web test-shared \
         lint-contracts lint-api lint-meter-sim lint-web lint-shared \
         coverage-contracts slither export-abis deploy-local gen-vectors test-contracts-ci \
-        migrate sim-provision sim test-integration pricing backtest
+        migrate sim-provision sim test-integration pricing backtest trading trade-demo
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -83,6 +83,10 @@ sim: $(SIM_DIR)/meters.json ## Run the SIMULATED meter in accelerated DEMO mode 
 
 pricing: ## Run the pricing engine as its own process (set PRICING_EMBEDDED=false on the API)
 	cd services/api && uv run python -m app.pricing.run
+trading: ## Run matcher/relayer/listener/sweeper as their own process (set TRADING_EMBEDDED=false on the API)
+	cd services/api && uv run python -m app.trading.run
+trade-demo: ## DEMO: two wallets place crossing orders against the running stack and settle on Anvil
+	cd services/api && uv run python -m dev.trade_demo
 backtest: ## Replay the engine over history: make backtest ARGS="--lat 13.08 --lon 80.27 --from 2026-06-01 --to 2026-06-07"
 	cd services/api && uv run python -m app.pricing.backtest $(ARGS)
 

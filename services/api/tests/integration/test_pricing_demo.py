@@ -80,7 +80,10 @@ async def test_prices_move_while_the_simulator_runs_accelerated(
             mint_worker_enabled=True,
             pricing_clock_mode="follow_readings",
             pricing_inventory_refresh_seconds=1,
-            clock_follow_window_seconds=600,
+            # The fake wall clock advances 15 s per tick, so on a slow runner (60 ticks = 900 s) a
+            # 600 s window would lapse mid-demo and the engine would fall back to real time (night in
+            # Chennai), making the price RISE. The window is measured in that fake time: keep it huge.
+            clock_follow_window_seconds=86_400,
         )
     ) as h:
         alice = await login(h, "0x" + Account.create().key.hex())

@@ -1,4 +1,4 @@
-# API reference (Phase 2)
+# API reference (Phases 2–4)
 
 Base path `/api/v1`. Interactive docs and the OpenAPI schema: `GET /docs`, `GET /openapi.json`.
 Operational endpoints sit at the root: `GET /health` (liveness), `GET /ready` (Postgres, Redis, RPC and the
@@ -136,3 +136,45 @@ Channel `price:{marketId}` carries `{"type":"price","channel":"price:{marketId}"
 (`data` = the object returned by `/price`). `seq` increments per tick; a gap means re-snapshot via REST.
 Snapshots: `price:{marketId}:latest`, `quote:{marketId}:latest`, `pricing:state:{marketId}`,
 `pricing:forecast:{marketId}`.
+
+# Trading (Phase 4)
+
+Amounts and prices are decimal **strings** (uint256 values do not fit JSON numbers): energy in Wh, prices in
+mUSDC base units per kWh. Sign orders with EIP-712 using the domain and types from `order-config`.
+
+## Public
+
+| Endpoint | Notes |
+|---|---|
+| `GET /markets/{id}/order-config` | EIP-712 domain/types, exchange/WATT/mUSDC addresses, `chain_id`, minimum sizes, price and expiry bounds, live `band_bps`/`fee_bps`, and ABI fragments of `cancel`/`cancelUpTo` for the binding on-chain cancel. |
+| `GET /markets/{id}/book?depth=` | Aggregated levels `{price, amount_wh, orders}` for bids and asks (no addresses). Matchable Wh only (unreserved, not cancel-pending, unexpired). |
+| `GET /markets/{id}/trades?limit&before` | The tape: **confirmed** trades only. |
+
+## Authenticated (SIWE cookie)
+
+| Endpoint | Notes |
+|---|---|
+| `POST /orders` | Body = the signed `Order` (`maker, marketId, side 0/1, amountWh, limitPrice, expiry, nonce, salt`) + `signature`. `maker` must be the signed-in address. **201** new, **200** if the same signed order was already stored. Error `code`s: `bad_signature`, `maker_mismatch`, `bad_order`, `order_too_small`, `bad_price`, `order_expired`, `bad_expiry`, `market_disabled`, `nonce_too_low`, `order_cancelled`, `already_filled`, `insufficient_balance` / `insufficient_allowance` (details: `required`, `already_committed`, `balance`, `allowance`, `block`), `too_many_open_orders` (429), `rate_limited` (429, `Retry-After`). |
+| `GET /orders?status&market&limit&before_seq` | Your orders, newest first. |
+| `GET /orders/{hash}` | One of your orders. |
+| `DELETE /orders/{hash}` | **Soft, off-chain cancel.** Returns `{order, cancel_type: "offchain", cancelled_wh, reserved_wh, cancel_pending, binding_onchain: false, message}`. Reserved (in-flight) Wh are never cancelled: the unreserved remainder is removed now, `cancel_pending` is true while the reserved part settles, and the order is then finalized as cancelled. Idempotent. 409 `not_cancellable` for filled/expired orders. |
+| `GET /trades?limit` | Your trades in every state: `status` (`matched`/`submitted`/`confirmed`/`failed`), `failure_reason`, `tx_hash`, `block_number`. |
+
+Order fields worth showing: `status` (`open`, `partially_filled`, `filled`, `cancelled`, `expired`), `filled_wh`,
+`reserved_wh`, `remaining_wh`, `cancel_pending`, `cancel_type` (`offchain` = "Cancelled", `onchain` = "Cancelled
+on-chain"), `cancel_reason` (`user`, `unfunded:balance`, `unfunded:allowance`, `dust_remainder`, `on_chain_cancel`,
+`nonce_floor`).
+
+## Admin
+
+| Endpoint | Notes |
+|---|---|
+| `GET /admin/trading/state` | Which roles have a leader, matching paused?, relayer halt reason, settlement counts by status, open orders, pairs on cooldown, listener cursor/head/lag. |
+| `POST /admin/trading/pause`, `/resume` | Stop/restart matching and new submissions (in-flight transactions are still tracked). |
+
+## Redis feed (consumed by the Phase 5 gateway)
+
+Same envelope as `price:{marketId}`: `{type, channel, seq, ts, data}` with a per-channel `seq`.
+`orderbook:{marketId}` (`type: "orderbook"`, aggregated levels), `trades:{marketId}` (`type: "trade"`, confirmed
+trades), `user:{address}` (`type: "order"` on every order change, `"fill"` on settlement state changes).
+Events are published only after the database transaction commits.

@@ -39,3 +39,15 @@ into limits) is documented in the pricing/matching docs and observable via `Trad
 
 Keeping the role in v1 bounds front-running and lets the matcher enforce price-time priority off-chain. The
 migration above is additive and does not change any signed EIP-712 type.
+
+## Addendum (Phase 4): off-chain cancel is only binding while settlement is relayer-gated
+
+`DELETE /api/v1/orders/{hash}` removes an order from *our* book and stops *our* matcher from using it. It does not
+change the order's validity on-chain: the signature stays valid until `expiry` or an on-chain `cancel`/`cancelUpTo`.
+That is safe in v1 only because `settle()` is `RELAYER_ROLE`-gated and the relayer is our own service, which honours
+the server-side cancel. Once settlement is made permissionless (path above), **any** party holding a still-valid
+signed order could settle it, so a server-side cancel would no longer protect the maker. Permissionless settlement
+therefore requires one of: (a) makers cancelling on-chain (`cancel`/`cancelUpTo`, costs gas), or (b) a signed
+cancel attestation (maker-signed EIP-712 `Cancel(orderHash, nonce)` checked by the exchange, gas-free for the maker),
+or (c) very short order expiries. The API already exposes `cancel_type` (`offchain` vs `onchain`) so clients can
+tell the two apart and offer the on-chain cancel.

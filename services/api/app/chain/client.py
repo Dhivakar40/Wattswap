@@ -1,5 +1,6 @@
 """web3.py v7 client: contracts, cached on-chain parameters and startup verification."""
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -16,6 +17,31 @@ from app.chain.revert import RevertDecoder, RevertInfo
 from app.core.config import Settings
 
 log = logging.getLogger("wattswap.chain")
+
+
+@dataclass(frozen=True)
+class ExchangeParams:
+    """Admin-settable exchange/oracle parameters the trading engine must respect."""
+
+    band_bps: int
+    fee_bps: int
+    max_staleness: int
+    treasury: str
+    paused: bool
+
+
+@dataclass(frozen=True)
+class MakerSnapshot:
+    """One maker's funds and order state read at ONE block, so the numbers are consistent."""
+
+    block: int
+    watt_balance: int
+    watt_allowance: int
+    usdc_balance: int
+    usdc_allowance: int
+    min_nonce: int
+    filled: dict[str, int]
+    cancelled: dict[str, bool]
 
 
 @dataclass(frozen=True)
@@ -51,9 +77,15 @@ class ChainClient:
         self.oracle: AsyncContract = self.w3.eth.contract(
             address=self.oracle_address, abi=oracle_abi
         )
-        self.decoder = RevertDecoder([token_abi, registry_abi, exchange_abi, oracle_abi])
+        usdc_abi = settings.load_abi("MockUSDC")
+        self.usdc_address = to_checksum_address(settings.contract_address("MockUSDC"))
+        self.usdc: AsyncContract = self.w3.eth.contract(address=self.usdc_address, abi=usdc_abi)
+        self.exchange_abi = exchange_abi
+        self.decoder = RevertDecoder([token_abi, registry_abi, exchange_abi, oracle_abi, usdc_abi])
         self._params: PlausibilityParams | None = None
         self._params_at = 0.0
+        self._xparams: ExchangeParams | None = None
+        self._xparams_at = 0.0
 
     # ------------------------------------------------------------------ accounts
     @staticmethod
@@ -92,6 +124,69 @@ class ChainClient:
         except ContractLogicError:  # NoPrice()
             return None
         return int(price), int(ts)
+
+    async def exchange_params(self, *, fresh: bool = False) -> ExchangeParams:
+        """Band, fee, quote staleness window and pause flag, cached briefly (all admin-settable)."""
+        now = time.monotonic()
+        ttl = self.settings.chain_params_ttl_seconds
+        if fresh or self._xparams is None or now - self._xparams_at > ttl:
+            band, fee, stale, treasury, paused = await asyncio.gather(
+                self.exchange.functions.bandBps().call(),
+                self.exchange.functions.feeBps().call(),
+                self.oracle.functions.maxStaleness().call(),
+                self.exchange.functions.treasury().call(),
+                self.exchange.functions.paused().call(),
+            )
+            self._xparams = ExchangeParams(
+                int(band), int(fee), int(stale), str(treasury).lower(), bool(paused)
+            )
+            self._xparams_at = now
+        return self._xparams
+
+    def invalidate_params(self) -> None:
+        self._xparams = None
+        self._params = None
+
+    async def market_enabled(self, market_id: str) -> bool:
+        return bool(await self.exchange.functions.marketEnabled(market_id).call())
+
+    async def maker_snapshot(
+        self, maker: str, order_hashes: list[str], block: int | None = None
+    ) -> MakerSnapshot:
+        """Balances, allowances, cancel state and fills for `maker`, all at one block number."""
+        if block is None:
+            block = int(await self.w3.eth.block_number)
+        who = to_checksum_address(maker)
+        ex = self.exchange_address
+        at: Any = block
+        head = await asyncio.gather(
+            self.token.functions.balanceOf(who).call(block_identifier=at),
+            self.token.functions.allowance(who, ex).call(block_identifier=at),
+            self.usdc.functions.balanceOf(who).call(block_identifier=at),
+            self.usdc.functions.allowance(who, ex).call(block_identifier=at),
+            self.exchange.functions.minNonce(who).call(block_identifier=at),
+        )
+        filled, cancelled = await asyncio.gather(
+            asyncio.gather(
+                *(self.exchange.functions.filled(h).call(block_identifier=at) for h in order_hashes)
+            ),
+            asyncio.gather(
+                *(
+                    self.exchange.functions.cancelled(h).call(block_identifier=at)
+                    for h in order_hashes
+                )
+            ),
+        )
+        return MakerSnapshot(
+            block=block,
+            watt_balance=int(head[0]),
+            watt_allowance=int(head[1]),
+            usdc_balance=int(head[2]),
+            usdc_allowance=int(head[3]),
+            min_nonce=int(head[4]),
+            filled={h: int(f) for h, f in zip(order_hashes, filled, strict=True)},
+            cancelled={h: bool(c) for h, c in zip(order_hashes, cancelled, strict=True)},
+        )
 
     async def balance_of(self, address: str) -> int:
         return int(await self.token.functions.balanceOf(to_checksum_address(address)).call())

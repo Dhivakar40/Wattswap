@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     energy_token_address: str | None = None
     meter_registry_address: str | None = None
     exchange_address: str | None = None
+    usdc_address: str | None = None
     price_oracle_address: str | None = None
 
     # --- meter pipeline -----------------------------------------------------------------
@@ -74,6 +75,10 @@ class Settings(BaseSettings):
     mint_max_attempts: int = Field(default=5, ge=1)
     mint_backoff_base_seconds: float = Field(default=1.0, gt=0)
     mint_backoff_max_seconds: float = Field(default=60.0, gt=0)
+    # Gas-price ceiling for every transaction this API sends (mint, settle, oracle). Fee bumps never
+    # exceed it; above it, transactions are held and retried later, never sent.
+    max_fee_per_gas_gwei: float = Field(default=100.0, gt=0)
+    max_priority_fee_gwei: float = Field(default=5.0, gt=0)
     chain_params_ttl_seconds: float = Field(default=30.0, ge=0)
 
     # --- pricing engine -----------------------------------------------------------------
@@ -93,6 +98,40 @@ class Settings(BaseSettings):
     oracle_push_threshold_bps: int = Field(default=50, ge=1)
     oracle_push_heartbeat_seconds: int = Field(default=120, ge=10)
     oracle_push_min_interval_seconds: int = Field(default=30, ge=1)
+
+    # --- trading (order book, matcher, relayer, listener) --------------------------------
+    trading_enabled: bool = True
+    trading_embedded: bool = True  # False: run `python -m app.trading.run` as its own process
+    min_order_wh: int = Field(default=100, ge=1)  # 0.1 kWh
+    min_fill_wh: int = Field(default=100, ge=1)
+    min_fill_cost: int = Field(default=1000, ge=1)  # mUSDC base units; keeps gas worth spending
+    min_limit_price: int = Field(default=1000, ge=1)  # mUSDC base units per kWh
+    max_limit_price: int = Field(default=100_000_000, ge=1)  # 100 mUSDC per kWh
+    min_order_life_seconds: int = Field(default=60, ge=1)
+    max_order_life_seconds: int = Field(default=7 * 86400, ge=60)
+    expiry_margin_seconds: int = Field(default=90, ge=0)  # must outlive submit + mining
+    max_open_orders_per_maker: int = Field(default=50, ge=1)
+    rate_limit_orders: int = Field(default=30, ge=1)  # order placements per address per window
+    match_poll_ms: int = Field(default=500, ge=50)
+    quote_safety_margin_seconds: int = Field(default=60, ge=1)
+    band_safety_pct: int = Field(default=90, ge=1, le=100)  # share of the on-chain band we use
+    settle_max_in_flight: int = Field(default=4, ge=1)
+    settle_hold_retry_seconds: float = Field(default=5.0, gt=0)  # gas above the ceiling: retry
+    settle_max_attempts: int = Field(default=5, ge=1)
+    settle_bump_after_seconds: float = Field(default=20.0, gt=0)
+    settle_backoff_base_seconds: float = Field(default=1.0, gt=0)
+    settle_backoff_max_seconds: float = Field(default=60.0, gt=0)
+    relayer_poll_seconds: float = Field(default=0.5, gt=0)
+    pair_cooldown_seconds: int = Field(default=30, ge=1)
+    pair_cooldown_max_seconds: int = Field(default=600, ge=1)
+    funding_sweep_seconds: float = Field(default=20.0, gt=0)
+    listener_confirmations: int = Field(default=1, ge=1)  # use 6 on Sepolia
+    listener_start_block: int = Field(default=0, ge=0)  # set to the deploy block on Sepolia
+    listener_reorg_window: int = Field(default=64, ge=2)
+    listener_batch_blocks: int = Field(default=500, ge=1)
+    listener_poll_seconds: float = Field(default=1.0, gt=0)
+    reconcile_seconds: float = Field(default=120.0, gt=0)
+    trading_leader_ttl_seconds: int = Field(default=30, ge=5)
 
     # --- rate limits (requests per window) ----------------------------------------------
     rate_limit_window_seconds: int = Field(default=60, ge=1)
@@ -165,6 +204,7 @@ class Settings(BaseSettings):
             "EnergyToken": self.energy_token_address,
             "MeterRegistry": self.meter_registry_address,
             "WattSwapExchange": self.exchange_address,
+            "MockUSDC": self.usdc_address,
             "PriceOracle": self.price_oracle_address,
         }.get(name)
         if override:

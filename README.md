@@ -117,6 +117,25 @@ moved. Each tick is signed as an EIP-712 `PriceQuote`, published to Redis (`pric
 * Admin (role-gated): edit parameters (validated, audited), watch the breaker, reset it, define regional markets.
 * Standalone: `make pricing` or `docker compose --profile pricing up -d pricing`; a Redis leader lock makes several safe.
 
+## Trading (order book, matcher, relayer, listener)
+
+Orders are EIP-712 messages signed by the maker's wallet and posted to `POST /api/v1/orders`. The API verifies the
+signature exactly as the exchange will, checks that the maker's balance **and** allowance cover all their open
+orders, and stores the order. A single-writer matcher (Redis leader lock) applies price-time priority and never
+matches a maker with themselves; the execution price is the engine's signed reference price clamped into the two
+limits and the exchange's quote band. The relayer then re-checks everything, takes a fresh quote and submits one
+atomic `settle()`; the chain listener confirms from the `TradeSettled` event (idempotent, reorg-aware).
+
+```bash
+make up && make deploy-local && make sim     # stack, contracts, simulated meter minting WATT
+make trade-demo                              # two wallets cross orders and settle on Anvil (DEMO)
+make trading                                 # run the trading workers as their own process
+```
+
+Details: [docs/settlement.md](docs/settlement.md) (flow, cancels, minimum sizes), [docs/api.md](docs/api.md),
+[ADR-008](docs/adr/008-trading-architecture.md), [threat model](docs/threat-model.md). Off-chain cancels are not
+binding on-chain; `cancel_type` tells the UI which kind happened.
+
 ## Environment variables
 
 Every variable is documented in [.env.example](.env.example). Copy it to `.env` (`make env`); never commit `.env`.

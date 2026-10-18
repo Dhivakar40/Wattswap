@@ -1,4 +1,4 @@
-"""ORM tables. `orders`, `trades`, `price_ticks` and `settlements` are schema-only in Phase 2."""
+"""ORM tables."""
 
 import uuid
 from datetime import datetime
@@ -11,6 +11,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     Numeric,
@@ -137,16 +138,23 @@ class Mint(Base, TimestampMixin):
 
 
 class Order(Base, TimestampMixin):
-    """Schema only (Phase 4)."""
+    """A maker's signed EIP-712 order. `order_hash` is the exchange's `hashOrder` digest.
+
+    Wh accounting: `filled_wh` is confirmed on-chain fills only; `reserved_wh` is in `matched` or
+    `submitted` settlements. Matchable remainder = amount - filled - reserved. The CHECK below is
+    the backstop that makes over-reservation impossible even with two writers.
+    """
 
     __tablename__ = "orders"
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    # Strict time priority: a database sequence, immune to clock ties and skew.
+    seq: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True, nullable=False)
     order_hash: Mapped[str] = mapped_column(Bytes32, unique=True, nullable=False)
     maker_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
-    maker: Mapped[str] = mapped_column(Address, nullable=False)
+    maker: Mapped[str] = mapped_column(Address, nullable=False)  # lowercase
     market_id: Mapped[str] = mapped_column(Bytes32, nullable=False)
     side: Mapped[OrderSide] = mapped_column(_enum(OrderSide, "order_side"), nullable=False)
     amount_wh: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
@@ -159,27 +167,49 @@ class Order(Base, TimestampMixin):
         _enum(OrderStatus, "order_status"), default=OrderStatus.OPEN, nullable=False
     )
     filled_wh: Mapped[Decimal] = mapped_column(Uint256, default=Decimal(0), nullable=False)
+    reserved_wh: Mapped[Decimal] = mapped_column(
+        Uint256, default=Decimal(0), server_default="0", nullable=False
+    )
+    # Stable machine codes (e.g. "user", "unfunded:balance", "dust_remainder", "on_chain_cancel").
     cancel_reason: Mapped[str | None] = mapped_column(Text)
+    # "offchain" (our book only; the signature stays valid on-chain) or "onchain" (binding).
+    cancel_type: Mapped[str | None] = mapped_column(String(16))
+    # A soft cancel asked while Wh were reserved: the unreserved remainder is already gone and the
+    # order is finalized as cancelled once the in-flight settlements resolve.
+    cancel_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     __table_args__ = (
-        CheckConstraint("filled_wh <= amount_wh", name="not_overfilled"),
-        Index("ix_orders_book", "market_id", "side", "status", "limit_price", "created_at"),
+        CheckConstraint("filled_wh + reserved_wh <= amount_wh", name="not_overfilled"),
+        CheckConstraint("filled_wh >= 0 AND reserved_wh >= 0", name="non_negative"),
+        CheckConstraint("cancel_type IN ('offchain', 'onchain')", name="cancel_type_values"),
+        Index("ix_orders_book", "market_id", "side", "status", "limit_price", "seq"),
+        Index("ix_orders_maker_status", "maker", "status"),
+        Index("ix_orders_expiry", "expiry"),
     )
 
 
 class Trade(Base):
-    """Schema only (Phase 4)."""
+    """One matched pair and fill. Whether it really happened is the settlement's status; the
+    `(tx_hash, log_index)` of the `TradeSettled` event is filled in by the chain listener."""
 
     __tablename__ = "trades"
-    __table_args__ = (UniqueConstraint("tx_hash", "log_index", name="uq_trades_tx_log"),)
+    __table_args__ = (
+        UniqueConstraint("tx_hash", "log_index", name="uq_trades_tx_log"),
+        Index("ix_trades_market_executed", "market_id", "executed_at"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
+    market_id: Mapped[str] = mapped_column(Bytes32, nullable=False)
     buy_order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orders.id"), nullable=False, index=True
     )
     sell_order_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("orders.id"), nullable=False, index=True
     )
+    buyer: Mapped[str] = mapped_column(Address, nullable=False, index=True)  # lowercase
+    seller: Mapped[str] = mapped_column(Address, nullable=False, index=True)  # lowercase
     fill_wh: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
     exec_price: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
     cost: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
@@ -189,6 +219,10 @@ class Trade(Base):
     block_number: Mapped[int | None] = mapped_column(BigInteger)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Settled on-chain by a transaction this API did not create (no settlement row).
+    external: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
 
 class PriceTick(Base):
@@ -286,19 +320,96 @@ class PricingEvent(Base):
 
 
 class Settlement(Base, TimestampMixin):
-    """Schema only (Phase 4)."""
+    """The settlement state machine: matched -> submitted -> confirmed | failed.
+
+    Only the chain listener sets `confirmed`. `failed` always carries `failure_reason`.
+    """
 
     __tablename__ = "settlements"
+    __table_args__ = (
+        Index("ix_settlements_status", "status"),
+        Index("ix_settlements_hashes", "buy_hash", "sell_hash"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     trade_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("trades.id"), unique=True, nullable=False
     )
+    market_id: Mapped[str] = mapped_column(Bytes32, nullable=False)
+    buy_hash: Mapped[str] = mapped_column(Bytes32, nullable=False)
+    sell_hash: Mapped[str] = mapped_column(Bytes32, nullable=False)
     status: Mapped[SettlementStatus] = mapped_column(
         _enum(SettlementStatus, "settlement_status"),
         default=SettlementStatus.MATCHED,
         nullable=False,
     )
-    tx_hash: Mapped[str | None] = mapped_column(Bytes32)
+    # The matcher's price is provisional; the final one is fixed when the tx is signed.
+    provisional_exec_price: Mapped[Decimal] = mapped_column(Uint256, nullable=False)
+    exec_price: Mapped[Decimal | None] = mapped_column(Uint256)
+    quote_price: Mapped[Decimal | None] = mapped_column(Uint256)
+    quote_timestamp: Mapped[int | None] = mapped_column(BigInteger)
+    # Signed raw tx saved BEFORE broadcast so a crash re-sends the same tx (never a new nonce).
+    raw_tx: Mapped[str | None] = mapped_column(Text)
+    tx_nonce: Mapped[int | None] = mapped_column(BigInteger)
+    tx_hash: Mapped[str | None] = mapped_column(Bytes32)  # latest
+    tx_hashes: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )  # incl. fee-bump replacements
+    block_number: Mapped[int | None] = mapped_column(BigInteger)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class PairCooldown(Base):
+    """Exponential-backoff cooldown for a (buy, sell) pair the relayer had to release."""
+
+    __tablename__ = "pair_cooldowns"
+
+    buy_hash: Mapped[str] = mapped_column(Bytes32, primary_key=True)
+    sell_hash: Mapped[str] = mapped_column(Bytes32, primary_key=True)
+    failures: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class ChainEvent(Base):
+    """An exchange/token log the listener has applied. UNIQUE(tx_hash, log_index) = idempotency."""
+
+    __tablename__ = "chain_events"
+    __table_args__ = (
+        UniqueConstraint("tx_hash", "log_index", name="uq_chain_events_tx_log"),
+        Index("ix_chain_events_block", "block_number"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tx_hash: Mapped[str] = mapped_column(Bytes32, nullable=False)
+    log_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Bytes32, nullable=False)
+    address: Mapped[str] = mapped_column(Address, nullable=False)
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    args: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    # What applying the event changed, so a reorg can reverse it exactly.
+    effects: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+
+
+class IndexerBlock(Base):
+    """Hash of every block the listener applied (recent window), to detect reorgs."""
+
+    __tablename__ = "indexer_blocks"
+
+    block_number: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    block_hash: Mapped[str] = mapped_column(Bytes32, nullable=False)
+
+
+class IndexerState(Base):
+    """Listener cursor: highest block whose logs are fully applied."""
+
+    __tablename__ = "indexer_state"
+
+    name: Mapped[str] = mapped_column(String(40), primary_key=True)
+    last_block: Mapped[int] = mapped_column(BigInteger, nullable=False)

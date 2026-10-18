@@ -29,7 +29,7 @@ from web3.exceptions import TransactionNotFound
 
 from app.chain.client import ChainClient
 from app.chain.revert import RevertInfo
-from app.chain.tx import SignedTx, TxRevertedError, TxSender, is_stale_nonce
+from app.chain.tx import FeeCeilingError, SignedTx, TxRevertedError, TxSender, is_stale_nonce
 from app.core.config import Settings
 from app.core.metrics import MINTS, MINTS_PENDING
 from app.models import Meter, Mint, MintStatus, Reading
@@ -290,6 +290,9 @@ class MintWorker:
                 # not a verdict on the reading. Keep it pending and retry with backoff.
                 log.info("mint not rejected by the contract, will retry: %s", exc)
                 return "retry"
+            except FeeCeilingError as exc:
+                log.warning("mint held by the gas-price ceiling; will retry: %s", exc)
+                return "retry"
             except Exception as exc:
                 log.warning("mint submit failed; will retry: %s", exc)
                 # If `persist` already ran, the row is SUBMITTED and _drive will re-broadcast.
@@ -384,4 +387,8 @@ class MintWorker:
             except TxRevertedError as exc:
                 # Typically ReadingAlreadyMinted: an earlier attempt landed. The next pass adopts it.
                 log.info("fee bump skipped: %s", exc)
+            except FeeCeilingError as exc:
+                log.warning(
+                    "fee bump held by the gas-price ceiling; keeping the pending tx: %s", exc
+                )
         return False

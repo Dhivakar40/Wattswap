@@ -32,6 +32,10 @@ EXPECTED_TABLES = {
     "pricing_params",
     "pricing_param_changes",
     "pricing_events",
+    "pair_cooldowns",
+    "chain_events",
+    "indexer_blocks",
+    "indexer_state",
 }
 
 

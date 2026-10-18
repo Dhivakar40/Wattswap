@@ -10,10 +10,14 @@ from app.models.base import (
     UserRole,
 )
 from app.models.tables import (
+    ChainEvent,
+    IndexerBlock,
+    IndexerState,
     Market,
     Meter,
     Mint,
     Order,
+    PairCooldown,
     PriceTick,
     PricingEvent,
     PricingParam,
@@ -26,6 +30,9 @@ from app.models.tables import (
 
 __all__ = [
     "Base",
+    "ChainEvent",
+    "IndexerBlock",
+    "IndexerState",
     "Market",
     "Meter",
     "Mint",
@@ -33,6 +40,7 @@ __all__ = [
     "Order",
     "OrderSide",
     "OrderStatus",
+    "PairCooldown",
     "PriceTick",
     "PricingEvent",
     "PricingParam",
