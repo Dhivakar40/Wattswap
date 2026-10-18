@@ -10,7 +10,7 @@ import httpx
 import pytest
 import respx
 from eth_account import Account
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models import Market, PriceTick, PricingEvent
 from app.pricing import publish, repo
@@ -565,3 +565,19 @@ async def test_only_one_instance_prices_at_a_time(make_settings: SettingsFactory
         leaders = [svc for svc in (a, b) if svc.markets]
         assert len(leaders) == 1  # the other never ticked
         assert len(await rows(h)) >= 3
+
+
+async def test_concurrent_start_up_creates_the_default_market_exactly_once(
+    make_settings: SettingsFactory,
+) -> None:
+    """The poller and the ticker (and other processes) all ensure the market at start."""
+    async with Harness(make_settings()) as h:
+
+        async def ensure() -> str:
+            async with h.app.state.sessionmaker() as s:
+                return (await repo.ensure_default_market(s)).market_id
+
+        ids = await asyncio.gather(*[ensure() for _ in range(12)])
+        assert set(ids) == {MID}
+        async with h.app.state.sessionmaker() as s:
+            assert await s.scalar(select(func.count()).select_from(Market)) == 1

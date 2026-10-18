@@ -16,6 +16,7 @@ from app.pricing.params import PricingParams
 from app.pricing.quotes import PriceQuote, recover_quote_signer, sign_quote
 from app.pricing.region import cell_of
 from app.pricing.trace import CLEAR_SKY_GHI
+from app.pricing.weather import parse_location
 
 REPO = Path(__file__).resolve().parents[5]
 VECTORS = json.loads((REPO / "packages/shared/vectors/eip712.json").read_text(encoding="utf-8"))
@@ -317,7 +318,7 @@ def test_backtest_rejects_invalid_parameters_and_missing_weather(
 def test_backtest_replay_matches_the_pure_engine(tmp_path: Path) -> None:
     """The replay is the production engine, not a re-implementation."""
     fixture = synthetic_fixture(tmp_path / "f.json")
-    series = backtest.parse_location(json.loads(fixture.read_text(encoding="utf-8")))
+    series = parse_location(json.loads(fixture.read_text(encoding="utf-8")))
     cell = cell_of(100_000, 100_000)
     p = PricingParams()
     start = int(datetime(2026, 6, 1, 12, tzinfo=UTC).timestamp())

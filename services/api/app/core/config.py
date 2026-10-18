@@ -141,6 +141,17 @@ class Settings(BaseSettings):
                     "JWT_SECRET must be set to a random value >= 32 chars in production"
                 )
         assert_distinct_role_keys(self)
+        if self.pricing_enabled:
+            # Same rule the admin API enforces: at this tick rate the per-tick limiter must not be
+            # able to reach the breaker threshold inside its window. Misconfiguration = no start.
+            from app.pricing.params import PricingParams, cross_check
+
+            problems = cross_check(PricingParams(tick_seconds=self.pricing_tick_seconds))
+            if problems:
+                raise ConfigError(
+                    f"PRICING_TICK_SECONDS={self.pricing_tick_seconds} is inconsistent with the "
+                    f"default pricing parameters: {'; '.join(problems.values())}"
+                )
         return self
 
     def load_abi(self, name: str) -> list[dict[str, object]]:

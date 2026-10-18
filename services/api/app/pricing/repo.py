@@ -1,6 +1,7 @@
 """Database access for the pricing engine."""
 
 import logging
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,7 @@ from typing import Any
 
 from eth_utils import keccak
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -46,13 +48,24 @@ def market_id_for(name: str) -> str:
 # ------------------------------------------------------------------------------ markets
 async def ensure_default_market(session: AsyncSession) -> Market:
     """The one market the contracts know (WATT-mUSDC): global region, primary for the oracle."""
-    market = await session.scalar(select(Market).where(Market.market_id == DEFAULT_MARKET_ID))
-    if market is None:
-        market = Market(
-            market_id=DEFAULT_MARKET_ID, name=MARKET_NAME, enabled=True, is_primary=True
+    # INSERT .. ON CONFLICT DO NOTHING: the weather poller and the ticker both call this at start-up
+    # (and several processes may), so a check-then-insert would race on a fresh database.
+    await session.execute(
+        pg_insert(Market)
+        .values(
+            id=uuid.uuid4(),
+            market_id=DEFAULT_MARKET_ID,
+            name=MARKET_NAME,
+            enabled=True,
+            is_primary=True,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
         )
-        session.add(market)
-        await session.commit()
+        .on_conflict_do_nothing(index_elements=["market_id"])
+    )
+    await session.commit()
+    market = await session.scalar(select(Market).where(Market.market_id == DEFAULT_MARKET_ID))
+    assert market is not None
     return market
 
 
