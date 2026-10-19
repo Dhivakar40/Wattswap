@@ -32,6 +32,7 @@ from app.routers import (
     markets,
     meters,
     orders,
+    portfolio,
     readings,
     system,
     ws,
@@ -189,6 +190,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(readings.router)
     api_v1.include_router(markets.router)
     api_v1.include_router(orders.router)
+    api_v1.include_router(portfolio.router)
     api_v1.include_router(admin_pricing.router)
     api_v1.include_router(admin_trading.router)
     api_v1.include_router(system.config_router)

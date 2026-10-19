@@ -216,16 +216,18 @@ async def my_trades(
     redis: RedisDep,
     response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before: Annotated[
+        datetime | None, Query(description="created_at cursor: only older trades")
+    ] = None,
 ) -> list[TradeOut]:
-    """The caller's trades in every state, with the settlement status and failure reason."""
+    """The caller's trades in every state, newest first, with the settlement status and failure
+    reason. Page with `before` = the last item's `created_at`."""
     me = user.address.lower()
     set_headers(response, await streams.head(redis, events.user_channel(me)))
-    rows = await session.scalars(
-        select(Trade)
-        .where(or_(Trade.buyer == me, Trade.seller == me))
-        .order_by(Trade.created_at.desc())
-        .limit(limit)
-    )
+    stmt = select(Trade).where(or_(Trade.buyer == me, Trade.seller == me))
+    if before is not None:
+        stmt = stmt.where(Trade.created_at < before)
+    rows = await session.scalars(stmt.order_by(Trade.created_at.desc()).limit(limit))
     out: list[TradeOut] = []
     for t in rows:
         st = await session.scalar(select(Settlement).where(Settlement.trade_id == t.id))

@@ -158,7 +158,30 @@ mUSDC base units per kWh. Sign orders with EIP-712 using the domain and types fr
 | `GET /orders?status&market&limit&before_seq` | Your orders, newest first. |
 | `GET /orders/{hash}` | One of your orders. |
 | `DELETE /orders/{hash}` | **Soft, off-chain cancel.** Returns `{order, cancel_type: "offchain", cancelled_wh, reserved_wh, cancel_pending, binding_onchain: false, message}`. Reserved (in-flight) Wh are never cancelled: the unreserved remainder is removed now, `cancel_pending` is true while the reserved part settles, and the order is then finalized as cancelled. Idempotent. 409 `not_cancellable` for filled/expired orders. |
-| `GET /trades?limit` | Your trades in every state: `status` (`matched`/`submitted`/`confirmed`/`failed`), `failure_reason`, `tx_hash`, `block_number`. |
+| `GET /trades?limit&before` | Your trades in every state, newest first: `status` (`matched`/`submitted`/`confirmed`/`failed`), `failure_reason`, `tx_hash`, `block_number`. Page with `before` = the last item's `created_at` (limit 1-200). |
+| `GET /portfolio?period=24h`, `7d`, `30d` or `all` | Exact totals for the dashboard, computed in SQL over **all** your rows (definitions below). Carries `X-Channel-Epoch` / `X-Channel-Seq` of `user:{you}`. |
+
+### `GET /portfolio` figure definitions
+
+Every amount is an integer **string**: energy in Wh (`1000 Wh = 1.000 WATT = 1 kWh`), money in mUSDC base units (6 dp).
+`period` filters trades by `executed_at` (`created_at` if unset) and mints by `confirmed_at`; `all` has no lower bound.
+`as_of` is the server time of the computation and `since` the window start (`null` for `all`).
+
+| Field | Definition |
+|---|---|
+| `produced_wh` | Sum of `amount_wh` of readings from **your meters** whose mint is `confirmed` on-chain. Pending and failed mints are not counted. |
+| `sold_wh` / `bought_wh` | Sum of `fill_wh` over **confirmed** trades where you are the seller / buyer. A trade is confirmed when its settlement is `confirmed`, or it was indexed from chain with no settlement row (`external`). `matched`, `submitted` and `failed` trades are never counted. |
+| `gross_sales_usdc` | Sum of `cost` over your confirmed sales (`cost = floor(fill_wh * price / 1000)`). |
+| `fees_usdc` | Sum of the protocol `fee` of those sales (the seller pays it: `seller receives = cost - fee`). |
+| `earned_usdc` | `gross_sales_usdc - fees_usdc`: the mUSDC you actually received from sales. |
+| `spent_usdc` | Sum of `cost` over your confirmed purchases. |
+| `confirmed_trades` | Count of confirmed trades (either side) in the window. |
+| `pending_trades` | Trades that are `matched` or `submitted`: not in any total yet. |
+| `failed_trades` | Trades whose settlement `failed`. |
+| `pending_mints` / `failed_mints` | Mints of your readings that are `pending` or `submitted`, or `failed` (by `created_at` in the window). |
+
+Test: `services/api/tests/api/test_portfolio.py` seeds 270 trades and 230 mints (more than any single page) and asserts every
+figure equals the sum over the **fully paginated** `/trades` and `/mints` lists, for every period.
 
 Order fields worth showing: `status` (`open`, `partially_filled`, `filled`, `cancelled`, `expired`), `filled_wh`,
 `reserved_wh`, `remaining_wh`, `cancel_pending`, `cancel_type` (`offchain` = "Cancelled", `onchain` = "Cancelled
