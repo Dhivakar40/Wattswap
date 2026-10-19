@@ -76,6 +76,12 @@ jobs:
       - run: make lint-api lint-meter-sim test-meter-sim
       - name: Order EIP-712 gate (Python reproduces every Foundry vector, byte for byte)
         run: cd services/api && uv run pytest -q tests/unit/test_order_vectors.py tests/unit/test_order_signatures.py
+      - name: Shared vectors, backend half (realtime sync scenarios + frontend SIWE messages)
+        run: cd services/api && uv run pytest -q tests/realtime/test_sync_protocol.py -k shared_vectors && uv run pytest -q tests/unit/test_siwe_frontend_fixture.py
+      - name: OpenAPI schema is exactly what the API produces (no drift)
+        run: |
+          cd services/api && uv run python -m scripts.export_openapi ../../packages/shared/openapi.json
+          git diff --exit-code -- packages/shared/openapi.json
       - name: API unit + API + migration tests
         run: cd services/api && uv run pytest -q -m "not integration" --cov=app --cov-report=term
       - name: End-to-end gates on Anvil (meter -> mint; pricing; order book -> match -> settle -> confirm)
@@ -92,7 +98,19 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make lint-shared lint-web test-shared test-web
+      - name: Shared vectors, frontend half (same ws-sync.json and SIWE fixture as the backend; fixture must be unchanged)
+        run: |
+          pnpm --filter @wattswap/web exec vitest run tests/realtime-sync.test.ts tests/siwe-fixture.test.ts
+          git diff --exit-code -- packages/shared/vectors
+      - name: Generated API client matches the committed OpenAPI schema (no drift)
+        run: |
+          pnpm --filter @wattswap/web gen:api
+          git diff --exit-code -- apps/web/src/lib/api/schema.d.ts
       - run: pnpm --filter @wattswap/web build
+      - name: /dev/ui must not exist in a production build
+        run: |
+          test ! -d apps/web/.next/server/app/dev
+          ! grep -rq "dev/ui" apps/web/.next/server/app-paths-manifest.json apps/web/.next/routes-manifest.json
 
   docker:
     runs-on: ubuntu-latest

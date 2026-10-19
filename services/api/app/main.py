@@ -19,6 +19,7 @@ from app.core.db import make_engine, make_sessionmaker
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging, request_id_ctx
 from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
+from app.core.pagination import NEXT_CURSOR_HEADER
 from app.core.redis import make_redis
 from app.core.state import ChainServices
 from app.pricing.factory import PricingBundle, build_pricing
@@ -32,6 +33,7 @@ from app.routers import (
     markets,
     meters,
     orders,
+    portfolio,
     readings,
     system,
     ws,
@@ -158,7 +160,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["content-type", "x-request-id"],
-        expose_headers=["x-request-id", "retry-after", SEQ_HEADER, EPOCH_HEADER],
+        expose_headers=[
+            "x-request-id",
+            "retry-after",
+            SEQ_HEADER,
+            EPOCH_HEADER,
+            NEXT_CURSOR_HEADER,
+        ],
     )
 
     @app.middleware("http")
@@ -189,6 +197,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(readings.router)
     api_v1.include_router(markets.router)
     api_v1.include_router(orders.router)
+    api_v1.include_router(portfolio.router)
     api_v1.include_router(admin_pricing.router)
     api_v1.include_router(admin_trading.router)
     api_v1.include_router(system.config_router)

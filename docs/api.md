@@ -18,6 +18,12 @@ on-chain role wiring), `GET /metrics` (Prometheus).
 - **Identifiers**: addresses are returned EIP-55 checksummed and accepted in any case; `bytes32` values are
   lowercase `0x` hex; energy is integer **Wh** (`1000 Wh = 1.000 WATT = 1 kWh`).
 - **CORS** is limited to `API_CORS_ORIGINS`; credentials are allowed for those origins only.
+- **Pagination** uses opaque **keyset cursors**: every list is ordered by `(sort key DESC, id DESC)` and the cursor holds the last
+  row's pair, so rows that share a timestamp are never skipped or repeated at a page boundary. Treat the cursor as an opaque
+  string and pass it back as `?before=`. Lists that return a bare array (`/orders`, `/trades`, `/markets/{id}/trades`) send the next
+  cursor in the `X-Next-Cursor` response header (absent on the last page); lists with an envelope (`/mints`,
+  `/meters/{id}/readings`, `/markets/{id}/ticks`) return it as `next_before` (`null` on the last page). A cursor from another list or a
+  malformed one is `400 bad_cursor`. Tested with dozens of rows carrying identical timestamps (`tests/api/test_pagination.py`).
 
 ## Auth
 
@@ -52,7 +58,7 @@ Expiration Time: 2026-10-18T12:05:00.000Z
 | `GET /meters` | Own meters (admins: all). Includes `minted_wh`. |
 | `GET /meters/{id}` | `{id}` is the uuid or the `bytes32` meter id. Someone else's meter is `404`, not `403`. |
 | `PATCH /meters/{id}` | Any of `label`, `active` (mirrored on-chain with `setActive`), `device_signer` (key rotation, on-chain `rotateDeviceSigner`; the old key stops working immediately). |
-| `GET /meters/{id}/readings?limit&before` | Newest first, each with its mint status. Page with `next_before`. |
+| `GET /meters/{id}/readings?limit&before` | Newest first, each with its mint status. Page with the opaque `next_before` cursor. |
 | `GET /mints?limit&before` | Mint history for the caller's meters with `status`, `tx_hash`, `block_number`, `failure_reason`. |
 
 ## Ingest
@@ -116,7 +122,7 @@ Model, formulas and parameters: [pricing-model.md](pricing-model.md). Prices are
 |---|---|
 | `GET /markets` | Markets with their region, `is_primary`, and `onchain_enabled` (`WattSwapExchange.marketEnabled`). |
 | `GET /markets/{id}/price` | Latest tick: `price`, `rawPrice`, `breaker`, `bandBps`, supply/demand in watts, `marketTime`, `clockMode`, `accelerated`, the **signed quote** `{marketId, price, timestamp, signature, signer}` and the full `drivers` breakdown. `seq` is the Redis sequence number. 404 `no_price_yet` before the first tick. |
-| `GET /markets/{id}/ticks?limit&before&drivers` | History, newest first; page with `next_before`; `drivers=true` includes the breakdown. |
+| `GET /markets/{id}/ticks?limit&before&drivers` | History, newest first; page with the opaque `next_before` cursor; `drivers=true` includes the breakdown. |
 | `GET /markets/{id}/forecast` | Next 24 hours of hourly generation, supply, demand and implied **raw** price (before smoothing). |
 
 ## Admin (role-gated; `ADMIN_ADDRESSES`)
@@ -148,17 +154,40 @@ mUSDC base units per kWh. Sign orders with EIP-712 using the domain and types fr
 |---|---|
 | `GET /markets/{id}/order-config` | EIP-712 domain/types, exchange/WATT/mUSDC addresses, `chain_id`, minimum sizes, price and expiry bounds, live `band_bps`/`fee_bps`, and ABI fragments of `cancel`/`cancelUpTo` for the binding on-chain cancel. |
 | `GET /markets/{id}/book?depth=` | Aggregated levels `{price, amount_wh, orders}` for bids and asks (no addresses). Matchable Wh only (unreserved, not cancel-pending, unexpired). |
-| `GET /markets/{id}/trades?limit&before` | The tape: **confirmed** trades only. |
+| `GET /markets/{id}/trades?limit&before` | The tape: **confirmed** trades only, newest first. Next cursor in `X-Next-Cursor`. |
 
 ## Authenticated (SIWE cookie)
 
 | Endpoint | Notes |
 |---|---|
 | `POST /orders` | Body = the signed `Order` (`maker, marketId, side 0/1, amountWh, limitPrice, expiry, nonce, salt`) + `signature`. `maker` must be the signed-in address. **201** new, **200** if the same signed order was already stored. Error `code`s: `bad_signature`, `maker_mismatch`, `bad_order`, `order_too_small`, `bad_price`, `order_expired`, `bad_expiry`, `market_disabled`, `nonce_too_low`, `order_cancelled`, `already_filled`, `insufficient_balance` / `insufficient_allowance` (details: `required`, `already_committed`, `balance`, `allowance`, `block`), `too_many_open_orders` (429), `rate_limited` (429, `Retry-After`). |
-| `GET /orders?status&market&limit&before_seq` | Your orders, newest first. |
+| `GET /orders?status&market&limit&before` | Your orders, newest first. Next cursor in `X-Next-Cursor`. |
 | `GET /orders/{hash}` | One of your orders. |
 | `DELETE /orders/{hash}` | **Soft, off-chain cancel.** Returns `{order, cancel_type: "offchain", cancelled_wh, reserved_wh, cancel_pending, binding_onchain: false, message}`. Reserved (in-flight) Wh are never cancelled: the unreserved remainder is removed now, `cancel_pending` is true while the reserved part settles, and the order is then finalized as cancelled. Idempotent. 409 `not_cancellable` for filled/expired orders. |
-| `GET /trades?limit` | Your trades in every state: `status` (`matched`/`submitted`/`confirmed`/`failed`), `failure_reason`, `tx_hash`, `block_number`. |
+| `GET /trades?limit&before` | Your trades in every state, newest first: `status` (`matched`/`submitted`/`confirmed`/`failed`), `failure_reason`, `tx_hash`, `block_number`. Next cursor in `X-Next-Cursor` (limit 1-200). |
+| `GET /portfolio?period=24h`, `7d`, `30d` or `all` | Exact totals for the dashboard, computed in SQL over **all** your rows (definitions below). Carries `X-Channel-Epoch` / `X-Channel-Seq` of `user:{you}`. |
+
+### `GET /portfolio` figure definitions
+
+Every amount is an integer **string**: energy in Wh (`1000 Wh = 1.000 WATT = 1 kWh`), money in mUSDC base units (6 dp).
+`period` filters trades by `executed_at` (`created_at` if unset) and mints by `confirmed_at`; `all` has no lower bound.
+`as_of` is the server time of the computation and `since` the window start (`null` for `all`).
+
+| Field | Definition |
+|---|---|
+| `produced_wh` | Sum of `amount_wh` of readings from **your meters** whose mint is `confirmed` on-chain. Pending and failed mints are not counted. |
+| `sold_wh` / `bought_wh` | Sum of `fill_wh` over **confirmed** trades where you are the seller / buyer. A trade is confirmed when its settlement is `confirmed`, or it was indexed from chain with no settlement row (`external`). `matched`, `submitted` and `failed` trades are never counted. |
+| `gross_sales_usdc` | Sum of `cost` over your confirmed sales (`cost = floor(fill_wh * price / 1000)`). |
+| `fees_usdc` | Sum of the protocol `fee` of those sales (the seller pays it: `seller receives = cost - fee`). |
+| `earned_usdc` | `gross_sales_usdc - fees_usdc`: the mUSDC you actually received from sales. |
+| `spent_usdc` | Sum of `cost` over your confirmed purchases. |
+| `confirmed_trades` | Count of confirmed trades (either side) in the window. |
+| `pending_trades` | Trades that are `matched` or `submitted`: not in any total yet. |
+| `failed_trades` | Trades whose settlement `failed`. |
+| `pending_mints` / `failed_mints` | Mints of your readings that are `pending` or `submitted`, or `failed` (by `created_at` in the window). |
+
+Test: `services/api/tests/api/test_portfolio.py` seeds 270 trades and 230 mints (more than any single page) and asserts every
+figure equals the sum over the **fully paginated** `/trades` and `/mints` lists, for every period.
 
 Order fields worth showing: `status` (`open`, `partially_filled`, `filled`, `cancelled`, `expired`), `filled_wh`,
 `reserved_wh`, `remaining_wh`, `cancel_pending`, `cancel_type` (`offchain` = "Cancelled", `onchain` = "Cancelled
@@ -176,7 +205,7 @@ on-chain"), `cancel_reason` (`user`, `unfunded:balance`, `unfunded:allowance`, `
 
 Same envelope as `price:{marketId}`: `{type, channel, seq, ts, data}` with a per-channel `seq`.
 `orderbook:{marketId}` (`type: "orderbook"`, aggregated levels), `trades:{marketId}` (`type: "trade"`, confirmed
-trades), `user:{address}` (`type: "order"` on every order change, `"fill"` on settlement state changes).
+trades), `user:{address}` (`type: "order"` on every order change, `"fill"` on settlement state changes, `"mint"` on every mint status change of your meters).
 Events are published only after the database transaction commits.
 
 # WebSocket (Phase 5)
@@ -221,7 +250,7 @@ in requests and normalised). Unknown markets are refused (`unknown_market`).
 | `forecast:{market}` | public | `forecast` | pricing engine, when the 24 h outlook is recomputed (5–10 min) | 50 / 1 h |
 | `orderbook:{market}` | public | `orderbook` | after every order/trade change (full depth, no addresses) | 5 000 / 10 min |
 | `trades:{market}` | public | `trade` | when a settlement is confirmed | 5 000 / 10 min |
-| `user:{address}` | that address | `order`, `fill` | every change to the user's orders / trades | 1 000 / 30 min |
+| `user:{address}` | that address | `order`, `fill`, `mint` | every change to the user's orders / trades, and every mint status change of the user's meters (same body as on `meter:{id}`) | 1 000 / 30 min |
 | `meter:{meterId}` | the meter's owner | `reading`, `mint` | reading ingest; mint worker transitions | 1 000 / 30 min |
 | `loadtest:{name}` | public, **dev only** (`WS_LOADTEST_ENABLED=true`, refused when `API_ENV=production`) | any | `make ws-load` | 1 000 / 1 min |
 

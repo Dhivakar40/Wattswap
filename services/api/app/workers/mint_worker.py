@@ -32,7 +32,7 @@ from app.chain.revert import RevertInfo
 from app.chain.tx import FeeCeilingError, SignedTx, TxRevertedError, TxSender, is_stale_nonce
 from app.core.config import Settings
 from app.core.metrics import MINTS, MINTS_PENDING
-from app.models import Meter, Mint, MintStatus, Reading
+from app.models import Meter, Mint, MintStatus, Reading, User
 from app.realtime import meter_events
 from app.services.readings import mint_out
 
@@ -215,14 +215,15 @@ class MintWorker:
         """Tell the meter owner's sockets about a mint status change (after the commit)."""
         row = (
             await s.execute(
-                select(Reading.reading_id, Meter.meter_id, Meter.is_simulated)
+                select(Reading.reading_id, Meter.meter_id, Meter.is_simulated, User.address)
                 .join(Meter, Meter.id == Reading.meter_pk)
+                .join(User, User.id == Meter.owner_id)
                 .where(Reading.id == mint.reading_pk)
             )
         ).one_or_none()
         if row is not None:
             await meter_events.publish_mint(
-                self.redis, row[1], row[0], mint_out(mint), simulated=bool(row[2])
+                self.redis, row[1], row[0], mint_out(mint), simulated=bool(row[2]), owner=row[3]
             )
 
     async def _finish_confirmed(

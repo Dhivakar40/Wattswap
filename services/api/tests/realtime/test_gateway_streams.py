@@ -112,6 +112,46 @@ async def test_meter_channel_is_owner_only_and_streams_reading_then_mint(
         assert INTERVAL == 900
 
 
+async def test_mint_status_is_also_published_to_the_owner_user_channel(
+    make_settings: SettingsFactory,
+) -> None:
+    """The dashboard follows only `user:{address}`: every mint transition must arrive there too,
+    owner only, with the same body as on `meter:{id}`."""
+    async with Harness(make_settings()) as h:
+        await seed_market(h)
+        alice = await login(h, KEY_ALICE)
+        bob = await login(h, KEY_BOB)
+        meter, key = await new_meter(h, alice)
+        user_chan = f"user:{alice.address.lower()}"
+        meter_chan = f"meter:{meter['meter_id']}"
+        async with Live(h) as lv:
+            async with (
+                lv.connect(cookie=alice.headers["cookie"]) as owner,
+                lv.connect(cookie=bob.headers["cookie"]) as other,
+            ):
+                await owner.subscribe(user_chan, meter_chan)
+                await other.subscribe(f"user:{bob.address.lower()}")
+                r = await post_reading(h, signed_reading(h, meter, key, past_start(30), 600))
+                assert r.status_code == 202
+                assert await make_worker(h).run_once() == 1
+                seen: dict[str, list[str]] = {user_chan: [], meter_chan: []}
+                bodies: dict[str, dict[str, Any]] = {}
+                while any(not v or v[-1] != "confirmed" for v in seen.values()):
+                    m = await owner.recv(15)
+                    if m["type"] != "mint":
+                        continue  # the meter channel also carries the `reading` frame
+                    seen[m["channel"]].append(m["data"]["status"])
+                    bodies[m["channel"]] = m["data"]
+                assert seen[user_chan] == ["submitted", "confirmed"]
+                assert seen[meter_chan] == ["submitted", "confirmed"]
+                assert bodies[user_chan] == bodies[meter_chan]
+                assert bodies[user_chan]["meter_id"] == meter["meter_id"]
+                assert bodies[user_chan]["simulated"] is True
+                # another user's own channel never sees Alice's mint
+                await other.send(op="ping")
+                assert (await other.recv_type("pong"))["type"] == "pong"
+
+
 # --------------------------------------------------------------------------------------- the book
 async def test_concurrent_book_flushes_never_publish_an_older_book_under_a_newer_seq(
     make_settings: SettingsFactory,

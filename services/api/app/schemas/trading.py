@@ -165,3 +165,24 @@ def trade_out(t: Trade, s: Settlement | None) -> TradeOut:
         created_at=t.created_at,
         external=t.external,
     )
+
+
+class PortfolioOut(BaseModel):
+    """Exact totals over every row of the caller in the window. All amounts are integer strings:
+    Wh for energy, mUSDC base units (6 dp) for money. Only confirmed trades / mints count."""
+
+    period: Literal["24h", "7d", "30d", "all"]
+    as_of: datetime
+    since: datetime | None
+    produced_wh: str = Field(description="Wh of confirmed mints from the caller's meters")
+    sold_wh: str
+    bought_wh: str
+    gross_sales_usdc: str = Field(description="Sum of cost over confirmed sales")
+    fees_usdc: str = Field(description="Protocol fees deducted from those sales")
+    earned_usdc: str = Field(description="gross_sales_usdc - fees_usdc: mUSDC actually received")
+    spent_usdc: str = Field(description="Sum of cost over confirmed purchases")
+    confirmed_trades: int
+    pending_trades: int = Field(description="matched or submitted, not yet counted in totals")
+    failed_trades: int
+    pending_mints: int
+    failed_mints: int

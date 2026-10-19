@@ -61,6 +61,9 @@ Then open:
 | `make pricing` | Run the pricing engine as its own process (set `PRICING_EMBEDDED=false` on the API) |
 | `make backtest ARGS="..."` | Replay the engine over historical Open-Meteo data (price series + volatility stats) |
 | `make test-integration` | The end-to-end gate: simulated meter, signed readings, WATT minted on Anvil |
+| `make gen-api` | Regenerate `packages/shared/openapi.json` and the typed web client (`apps/web/src/lib/api/schema.d.ts`) from FastAPI |
+| `make check-api-drift` | Fail if either generated file is stale (CI runs the same check) |
+| `make web-shots` | Visual QA: screenshots every 6a page and `/dev/ui` at 360/768/1440 px, both themes, with axe checks |
 | `make gen-vectors` | Regenerate shared EIP-712 test vectors (`packages/shared/vectors/eip712.json`) |
 | `make test-<area>` / `make lint-<area>` | One of `contracts`, `api`, `meter-sim`, `shared`, `web` |
 
@@ -150,6 +153,23 @@ make ws-load           # 500 clients on a synthetic channel, p95 delivery latenc
 ```
 
 Protocol, close codes and limits: [docs/api.md](docs/api.md#websocket-phase-5) · [ADR-009](docs/adr/009-realtime-gateway.md).
+
+## Web app (`apps/web`)
+
+Next.js 15 (App Router), Tailwind 4 design tokens (dark default, light toggle), wagmi + viem + RainbowKit, TanStack Query.
+Wallet flow: connect, switch network if needed, Sign-In with Ethereum, session cookie. Amounts are `bigint` end to end
+through one module (`src/lib/amounts.ts`). The realtime client (`src/lib/realtime`) is a tested port of the reference
+`services/api/dev/ws_sync.py`; both run the same scenarios from `packages/shared/vectors/ws-sync.json`.
+
+```bash
+make up && make deploy-local          # stack + contracts (the web container is built on :3000)
+make sim && make trade-demo           # real data: a simulated meter mints, two wallets trade
+pnpm --filter @wattswap/web dev       # or open http://localhost:3000 from `make up`
+WEB_DEV_UI=1 pnpm --filter @wattswap/web dev   # also serves /dev/ui, the component inventory (never in production builds)
+```
+
+Phase 6 status: **6a** (design system, shell, wallet, data layer, dashboard) is built; **6b** (Trade, Meters, Insights,
+Activity, Settings, Admin) is next. Plan: [docs/phases/phase-6.md](docs/phases/phase-6.md) · [ADR-010](docs/adr/010-frontend-foundation.md).
 
 ## Environment variables
 

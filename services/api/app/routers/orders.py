@@ -3,15 +3,21 @@
 import json
 import logging
 import time
-from datetime import UTC, datetime
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, tuple_
 
 from app.auth.deps import SessionDep, UserDep
 from app.chain.orders import ORDER_TYPES
 from app.core.errors import AppError
+from app.core.pagination import (
+    CURSOR_DOC,
+    NEXT_CURSOR_HEADER,
+    decode_cursor,
+    encode_cursor,
+)
 from app.core.ratelimit import ip_limit
 from app.core.state import ChainDep, RedisDep, SettingsDep
 from app.matching import events, service
@@ -122,7 +128,7 @@ async def my_orders(
     status: Annotated[OrderStatus | None, Query()] = None,
     market: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    before_seq: Annotated[int | None, Query(ge=0)] = None,
+    before: Annotated[str | None, Query(description=CURSOR_DOC)] = None,
 ) -> list[OrderOut]:
     # Head seq FIRST, then the data: every later change is then a delta with seq > this value.
     set_headers(response, await streams.head(redis, events.user_channel(user.address)))
@@ -131,10 +137,14 @@ async def my_orders(
         q = q.where(Order.status == status)
     if market is not None:
         q = q.where(Order.market_id == market.lower())
-    if before_seq is not None:
-        q = q.where(Order.seq < before_seq)
-    rows = await session.scalars(q.order_by(Order.seq.desc()).limit(limit))
-    return [order_out(o) for o in rows]
+    if before is not None:
+        # `seq` is unique, so it is a total order on its own
+        q = q.where(Order.seq < decode_cursor(before, key="int", id_type=None).key)
+    rows = list((await session.scalars(q.order_by(Order.seq.desc()).limit(limit + 1))).all())
+    page = rows[:limit]
+    if len(rows) > limit:
+        response.headers[NEXT_CURSOR_HEADER] = encode_cursor(page[-1].seq, None)
+    return [order_out(o) for o in page]
 
 
 @router.get("/orders/{order_hash}", response_model=OrderOut)
@@ -193,17 +203,22 @@ async def tape(
     redis: RedisDep,
     response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    before: Annotated[int | None, Query(ge=0, description="unix ts cursor")] = None,
+    before: Annotated[str | None, Query(description=CURSOR_DOC)] = None,
 ) -> list[TradeOut]:
-    """Confirmed trades only."""
+    """Confirmed trades only, newest first. The next page cursor is in `X-Next-Cursor`."""
     m = await _market(session, market_id)
     set_headers(response, await streams.head(redis, events.trades_channel(m.market_id)))
     q = select(Trade).where(Trade.market_id == m.market_id, Trade.executed_at.is_not(None))
     if before is not None:
-        q = q.where(Trade.executed_at < datetime.fromtimestamp(before, UTC))
-    rows = await session.scalars(q.order_by(Trade.executed_at.desc()).limit(limit))
+        c = decode_cursor(before, key="time", id_type=uuid.UUID)
+        q = q.where(tuple_(Trade.executed_at, Trade.id) < tuple_(c.key, c.id))
+    stmt = q.order_by(Trade.executed_at.desc(), Trade.id.desc()).limit(limit + 1)
+    rows = list((await session.scalars(stmt)).all())
+    page = rows[:limit]
+    if len(rows) > limit and page[-1].executed_at is not None:
+        response.headers[NEXT_CURSOR_HEADER] = encode_cursor(page[-1].executed_at, page[-1].id)
     out: list[TradeOut] = []
-    for t in rows:
+    for t in page:
         st = await session.scalar(select(Settlement).where(Settlement.trade_id == t.id))
         out.append(trade_out(t, st))
     return out
@@ -216,18 +231,28 @@ async def my_trades(
     redis: RedisDep,
     response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before: Annotated[str | None, Query(description=CURSOR_DOC)] = None,
 ) -> list[TradeOut]:
-    """The caller's trades in every state, with the settlement status and failure reason."""
+    """The caller's trades in every state, newest first, with the settlement status and failure
+    reason. The next page cursor is in `X-Next-Cursor` (absent on the last page)."""
     me = user.address.lower()
     set_headers(response, await streams.head(redis, events.user_channel(me)))
-    rows = await session.scalars(
-        select(Trade)
-        .where(or_(Trade.buyer == me, Trade.seller == me))
-        .order_by(Trade.created_at.desc())
-        .limit(limit)
+    q = select(Trade).where(or_(Trade.buyer == me, Trade.seller == me))
+    if before is not None:
+        c = decode_cursor(before, key="time", id_type=uuid.UUID)
+        q = q.where(tuple_(Trade.created_at, Trade.id) < tuple_(c.key, c.id))
+    rows = list(
+        (
+            await session.scalars(
+                q.order_by(Trade.created_at.desc(), Trade.id.desc()).limit(limit + 1)
+            )
+        ).all()
     )
+    page = rows[:limit]
+    if len(rows) > limit:
+        response.headers[NEXT_CURSOR_HEADER] = encode_cursor(page[-1].created_at, page[-1].id)
     out: list[TradeOut] = []
-    for t in rows:
+    for t in page:
         st = await session.scalar(select(Settlement).where(Settlement.trade_id == t.id))
         out.append(trade_out(t, st))
     return out

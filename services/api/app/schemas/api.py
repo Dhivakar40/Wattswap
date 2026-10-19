@@ -102,7 +102,7 @@ class ReadingAccepted(BaseModel):
 
 class ReadingsPage(BaseModel):
     items: list[ReadingOut]
-    next_before: int | None
+    next_before: str | None = Field(default=None, description="opaque cursor for ?before=")
 
 
 class MintItem(BaseModel):
@@ -116,7 +116,7 @@ class MintItem(BaseModel):
 
 class MintsPage(BaseModel):
     items: list[MintItem]
-    next_before: datetime | None
+    next_before: str | None = Field(default=None, description="opaque cursor for ?before=")
 
 
 # ---------------------------------------------------------------------------- config

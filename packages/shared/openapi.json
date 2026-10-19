@@ -1,0 +1,3418 @@
+{
+  "components": {
+    "schemas": {
+      "BookLevel": {
+        "properties": {
+          "amount_wh": {
+            "title": "Amount Wh",
+            "type": "string"
+          },
+          "orders": {
+            "title": "Orders",
+            "type": "integer"
+          },
+          "price": {
+            "title": "Price",
+            "type": "string"
+          }
+        },
+        "required": [
+          "price",
+          "amount_wh",
+          "orders"
+        ],
+        "title": "BookLevel",
+        "type": "object"
+      },
+      "BookOut": {
+        "properties": {
+          "asks": {
+            "items": {
+              "$ref": "#/components/schemas/BookLevel"
+            },
+            "title": "Asks",
+            "type": "array"
+          },
+          "bids": {
+            "items": {
+              "$ref": "#/components/schemas/BookLevel"
+            },
+            "title": "Bids",
+            "type": "array"
+          },
+          "epoch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Epoch"
+          },
+          "market_id": {
+            "title": "Market Id",
+            "type": "string"
+          },
+          "seq": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seq"
+          },
+          "ts": {
+            "title": "Ts",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "market_id",
+          "bids",
+          "asks",
+          "ts"
+        ],
+        "title": "BookOut",
+        "type": "object"
+      },
+      "BreakerResetIn": {
+        "additionalProperties": false,
+        "properties": {
+          "market_id": {
+            "title": "Market Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_id"
+        ],
+        "title": "BreakerResetIn",
+        "type": "object"
+      },
+      "CancelOut": {
+        "description": "Result of DELETE /orders/{hash}. The state is always spelled out.",
+        "properties": {
+          "binding_onchain": {
+            "const": false,
+            "default": false,
+            "description": "An off-chain cancel does not void the signature on-chain; use cancel/cancelUpTo",
+            "title": "Binding Onchain",
+            "type": "boolean"
+          },
+          "cancel_pending": {
+            "description": "True while reserved Wh settle; the order is finalized as cancelled afterwards",
+            "title": "Cancel Pending",
+            "type": "boolean"
+          },
+          "cancel_type": {
+            "const": "offchain",
+            "default": "offchain",
+            "title": "Cancel Type",
+            "type": "string"
+          },
+          "cancelled_wh": {
+            "description": "Wh removed from the book right now (the unreserved part)",
+            "title": "Cancelled Wh",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "order": {
+            "$ref": "#/components/schemas/OrderOut"
+          },
+          "reserved_wh": {
+            "description": "Wh still reserved by in-flight settlements",
+            "title": "Reserved Wh",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order",
+          "cancelled_wh",
+          "reserved_wh",
+          "cancel_pending",
+          "message"
+        ],
+        "title": "CancelOut",
+        "type": "object"
+      },
+      "ConfigEntry": {
+        "properties": {
+          "default": {
+            "title": "Default"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "editable": {
+            "title": "Editable",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_change": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Change"
+          },
+          "maximum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Maximum"
+          },
+          "minimum": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Minimum"
+          },
+          "overridden": {
+            "title": "Overridden",
+            "type": "boolean"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "unit",
+          "description",
+          "default",
+          "value",
+          "source",
+          "overridden",
+          "minimum",
+          "maximum",
+          "editable"
+        ],
+        "title": "ConfigEntry",
+        "type": "object"
+      },
+      "ConfigOut": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ConfigEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "market_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Market Id"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_id",
+          "scope",
+          "entries"
+        ],
+        "title": "ConfigOut",
+        "type": "object"
+      },
+      "ConfigUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "market_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Market to override; omit for all markets",
+            "title": "Market Id"
+          },
+          "reset": {
+            "description": "Keys whose override to remove",
+            "items": {
+              "type": "string"
+            },
+            "title": "Reset",
+            "type": "array"
+          },
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "title": "ConfigUpdate",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "LoginIn": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Message",
+            "type": "string"
+          },
+          "signature": {
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Signature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "signature"
+        ],
+        "title": "LoginIn",
+        "type": "object"
+      },
+      "MarketCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "is_primary": {
+            "default": false,
+            "title": "Is Primary",
+            "type": "boolean"
+          },
+          "max_lat_e6": {
+            "anyOf": [
+              {
+                "maximum": 90000000.0,
+                "minimum": -90000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lat E6"
+          },
+          "max_lon_e6": {
+            "anyOf": [
+              {
+                "maximum": 180000000.0,
+                "minimum": -180000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lon E6"
+          },
+          "min_lat_e6": {
+            "anyOf": [
+              {
+                "maximum": 90000000.0,
+                "minimum": -90000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lat E6"
+          },
+          "min_lon_e6": {
+            "anyOf": [
+              {
+                "maximum": 180000000.0,
+                "minimum": -180000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lon E6"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "MarketCreate",
+        "type": "object"
+      },
+      "MarketOut": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "is_primary": {
+            "title": "Is Primary",
+            "type": "boolean"
+          },
+          "market_id": {
+            "title": "Market Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "onchain_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Onchain Enabled"
+          },
+          "region": {
+            "$ref": "#/components/schemas/RegionOut"
+          }
+        },
+        "required": [
+          "market_id",
+          "name",
+          "enabled",
+          "is_primary",
+          "region"
+        ],
+        "title": "MarketOut",
+        "type": "object"
+      },
+      "MarketPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "is_primary": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Primary"
+          },
+          "max_lat_e6": {
+            "anyOf": [
+              {
+                "maximum": 90000000.0,
+                "minimum": -90000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lat E6"
+          },
+          "max_lon_e6": {
+            "anyOf": [
+              {
+                "maximum": 180000000.0,
+                "minimum": -180000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lon E6"
+          },
+          "min_lat_e6": {
+            "anyOf": [
+              {
+                "maximum": 90000000.0,
+                "minimum": -90000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lat E6"
+          },
+          "min_lon_e6": {
+            "anyOf": [
+              {
+                "maximum": 180000000.0,
+                "minimum": -180000000.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lon E6"
+          }
+        },
+        "title": "MarketPatch",
+        "type": "object"
+      },
+      "MeterCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "device_signer": {
+            "title": "Device Signer",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Lon",
+            "type": "number"
+          },
+          "rated_capacity_w": {
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Rated Capacity W",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "label",
+          "device_signer",
+          "rated_capacity_w",
+          "lat",
+          "lon"
+        ],
+        "title": "MeterCreate",
+        "type": "object"
+      },
+      "MeterOut": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "device_signer": {
+            "title": "Device Signer",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_simulated": {
+            "title": "Is Simulated",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "lat": {
+            "title": "Lat",
+            "type": "number"
+          },
+          "lon": {
+            "title": "Lon",
+            "type": "number"
+          },
+          "meter_id": {
+            "title": "Meter Id",
+            "type": "string"
+          },
+          "minted_wh": {
+            "title": "Minted Wh",
+            "type": "integer"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "rated_capacity_w": {
+            "title": "Rated Capacity W",
+            "type": "integer"
+          },
+          "register_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Register Error"
+          },
+          "register_status": {
+            "enum": [
+              "pending",
+              "confirmed",
+              "failed"
+            ],
+            "title": "Register Status",
+            "type": "string"
+          },
+          "register_tx_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Register Tx Hash"
+          }
+        },
+        "required": [
+          "id",
+          "meter_id",
+          "owner",
+          "device_signer",
+          "label",
+          "rated_capacity_w",
+          "lat",
+          "lon",
+          "active",
+          "is_simulated",
+          "register_status",
+          "register_tx_hash",
+          "register_error",
+          "minted_wh",
+          "created_at"
+        ],
+        "title": "MeterOut",
+        "type": "object"
+      },
+      "MeterPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active"
+          },
+          "device_signer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Signer"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "title": "MeterPatch",
+        "type": "object"
+      },
+      "MintItem": {
+        "properties": {
+          "amount_wh": {
+            "title": "Amount Wh",
+            "type": "integer"
+          },
+          "interval_seconds": {
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "interval_start": {
+            "title": "Interval Start",
+            "type": "integer"
+          },
+          "meter_id": {
+            "title": "Meter Id",
+            "type": "string"
+          },
+          "mint": {
+            "$ref": "#/components/schemas/MintOut"
+          },
+          "reading_id": {
+            "title": "Reading Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reading_id",
+          "meter_id",
+          "amount_wh",
+          "interval_start",
+          "interval_seconds",
+          "mint"
+        ],
+        "title": "MintItem",
+        "type": "object"
+      },
+      "MintOut": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "block_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Number"
+          },
+          "confirmed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed At"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "submitted",
+              "confirmed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tx_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Hash"
+          }
+        },
+        "required": [
+          "status",
+          "tx_hash",
+          "block_number",
+          "attempts",
+          "failure_reason",
+          "confirmed_at"
+        ],
+        "title": "MintOut",
+        "type": "object"
+      },
+      "MintsPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MintItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "opaque cursor for ?before=",
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "MintsPage",
+        "type": "object"
+      },
+      "NonceOut": {
+        "properties": {
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "nonce": {
+            "title": "Nonce",
+            "type": "string"
+          }
+        },
+        "required": [
+          "nonce",
+          "expires_in"
+        ],
+        "title": "NonceOut",
+        "type": "object"
+      },
+      "OrderConfigOut": {
+        "properties": {
+          "band_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Band Bps"
+          },
+          "cancel_onchain_abi": {
+            "description": "ABI fragments of cancel(order) and cancelUpTo(nonce): the binding cancels",
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Cancel Onchain Abi",
+            "type": "array"
+          },
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          },
+          "eip712_domain": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Eip712 Domain",
+            "type": "object"
+          },
+          "eip712_types": {
+            "additionalProperties": {
+              "items": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "title": "Eip712 Types",
+            "type": "object"
+          },
+          "exchange_address": {
+            "title": "Exchange Address",
+            "type": "string"
+          },
+          "fee_bps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fee Bps"
+          },
+          "market_id": {
+            "title": "Market Id",
+            "type": "string"
+          },
+          "max_limit_price": {
+            "title": "Max Limit Price",
+            "type": "integer"
+          },
+          "max_order_life_seconds": {
+            "title": "Max Order Life Seconds",
+            "type": "integer"
+          },
+          "min_fill_wh": {
+            "title": "Min Fill Wh",
+            "type": "integer"
+          },
+          "min_limit_price": {
+            "title": "Min Limit Price",
+            "type": "integer"
+          },
+          "min_order_life_seconds": {
+            "title": "Min Order Life Seconds",
+            "type": "integer"
+          },
+          "min_order_wh": {
+            "title": "Min Order Wh",
+            "type": "integer"
+          },
+          "primary_type": {
+            "const": "Order",
+            "default": "Order",
+            "title": "Primary Type",
+            "type": "string"
+          },
+          "usdc_address": {
+            "title": "Usdc Address",
+            "type": "string"
+          },
+          "watt_address": {
+            "title": "Watt Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "market_id",
+          "chain_id",
+          "exchange_address",
+          "watt_address",
+          "usdc_address",
+          "eip712_domain",
+          "eip712_types",
+          "min_order_wh",
+          "min_fill_wh",
+          "min_limit_price",
+          "max_limit_price",
+          "min_order_life_seconds",
+          "max_order_life_seconds",
+          "band_bps",
+          "fee_bps",
+          "cancel_onchain_abi"
+        ],
+        "title": "OrderConfigOut",
+        "type": "object"
+      },
+      "OrderIn": {
+        "additionalProperties": false,
+        "description": "A signed `Order` exactly as in the EIP-712 struct, plus the signature.",
+        "properties": {
+          "amountWh": {
+            "pattern": "^[0-9]{1,78}$",
+            "title": "Amountwh",
+            "type": "string"
+          },
+          "expiry": {
+            "pattern": "^[0-9]{1,78}$",
+            "title": "Expiry",
+            "type": "string"
+          },
+          "limitPrice": {
+            "description": "mUSDC base units (6 dp) per kWh",
+            "pattern": "^[0-9]{1,78}$",
+            "title": "Limitprice",
+            "type": "string"
+          },
+          "maker": {
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "title": "Maker",
+            "type": "string"
+          },
+          "marketId": {
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "title": "Marketid",
+            "type": "string"
+          },
+          "nonce": {
+            "pattern": "^[0-9]{1,78}$",
+            "title": "Nonce",
+            "type": "string"
+          },
+          "salt": {
+            "pattern": "^0x[0-9a-fA-F]{64}$",
+            "title": "Salt",
+            "type": "string"
+          },
+          "side": {
+            "description": "0 = buy, 1 = sell",
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Side",
+            "type": "integer"
+          },
+          "signature": {
+            "maxLength": 200,
+            "pattern": "^0x[0-9a-fA-F]+$",
+            "title": "Signature",
+            "type": "string"
+          }
+        },
+        "required": [
+          "maker",
+          "marketId",
+          "side",
+          "amountWh",
+          "limitPrice",
+          "expiry",
+          "nonce",
+          "salt",
+          "signature"
+        ],
+        "title": "OrderIn",
+        "type": "object"
+      },
+      "OrderOut": {
+        "properties": {
+          "amount_wh": {
+            "title": "Amount Wh",
+            "type": "string"
+          },
+          "cancel_pending": {
+            "title": "Cancel Pending",
+            "type": "boolean"
+          },
+          "cancel_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Reason"
+          },
+          "cancel_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "offchain",
+                  "onchain"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancel Type"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expiry": {
+            "title": "Expiry",
+            "type": "integer"
+          },
+          "filled_wh": {
+            "title": "Filled Wh",
+            "type": "string"
+          },
+          "limit_price": {
+            "title": "Limit Price",
+            "type": "string"
+          },
+          "maker": {
+            "title": "Maker",
+            "type": "string"
+          },
+          "market_id": {
+            "title": "Market Id",
+            "type": "string"
+          },
+          "nonce": {
+            "title": "Nonce",
+            "type": "string"
+          },
+          "order_hash": {
+            "title": "Order Hash",
+            "type": "string"
+          },
+          "remaining_wh": {
+            "title": "Remaining Wh",
+            "type": "string"
+          },
+          "reserved_wh": {
+            "title": "Reserved Wh",
+            "type": "string"
+          },
+          "salt": {
+            "title": "Salt",
+            "type": "string"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "title": "Side",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "partially_filled",
+              "filled",
+              "cancelled",
+              "expired"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order_hash",
+          "maker",
+          "market_id",
+          "side",
+          "amount_wh",
+          "limit_price",
+          "expiry",
+          "nonce",
+          "salt",
+          "status",
+          "filled_wh",
+          "reserved_wh",
+          "remaining_wh",
+          "cancel_reason",
+          "cancel_type",
+          "cancel_pending",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "OrderOut",
+        "type": "object"
+      },
+      "OrderStatus": {
+        "enum": [
+          "open",
+          "partially_filled",
+          "filled",
+          "cancelled",
+          "expired"
+        ],
+        "title": "OrderStatus",
+        "type": "string"
+      },
+      "PortfolioOut": {
+        "description": "Exact totals over every row of the caller in the window. All amounts are integer strings:\nWh for energy, mUSDC base units (6 dp) for money. Only confirmed trades / mints count.",
+        "properties": {
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "bought_wh": {
+            "title": "Bought Wh",
+            "type": "string"
+          },
+          "confirmed_trades": {
+            "title": "Confirmed Trades",
+            "type": "integer"
+          },
+          "earned_usdc": {
+            "description": "gross_sales_usdc - fees_usdc: mUSDC actually received",
+            "title": "Earned Usdc",
+            "type": "string"
+          },
+          "failed_mints": {
+            "title": "Failed Mints",
+            "type": "integer"
+          },
+          "failed_trades": {
+            "title": "Failed Trades",
+            "type": "integer"
+          },
+          "fees_usdc": {
+            "description": "Protocol fees deducted from those sales",
+            "title": "Fees Usdc",
+            "type": "string"
+          },
+          "gross_sales_usdc": {
+            "description": "Sum of cost over confirmed sales",
+            "title": "Gross Sales Usdc",
+            "type": "string"
+          },
+          "pending_mints": {
+            "title": "Pending Mints",
+            "type": "integer"
+          },
+          "pending_trades": {
+            "description": "matched or submitted, not yet counted in totals",
+            "title": "Pending Trades",
+            "type": "integer"
+          },
+          "period": {
+            "enum": [
+              "24h",
+              "7d",
+              "30d",
+              "all"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "produced_wh": {
+            "description": "Wh of confirmed mints from the caller's meters",
+            "title": "Produced Wh",
+            "type": "string"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "sold_wh": {
+            "title": "Sold Wh",
+            "type": "string"
+          },
+          "spent_usdc": {
+            "description": "Sum of cost over confirmed purchases",
+            "title": "Spent Usdc",
+            "type": "string"
+          }
+        },
+        "required": [
+          "period",
+          "as_of",
+          "since",
+          "produced_wh",
+          "sold_wh",
+          "bought_wh",
+          "gross_sales_usdc",
+          "fees_usdc",
+          "earned_usdc",
+          "spent_usdc",
+          "confirmed_trades",
+          "pending_trades",
+          "failed_trades",
+          "pending_mints",
+          "failed_mints"
+        ],
+        "title": "PortfolioOut",
+        "type": "object"
+      },
+      "PublicConfig": {
+        "properties": {
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "integer"
+          },
+          "energy_token": {
+            "title": "Energy Token",
+            "type": "string"
+          },
+          "max_interval_seconds": {
+            "title": "Max Interval Seconds",
+            "type": "integer"
+          },
+          "meter_registry": {
+            "title": "Meter Registry",
+            "type": "string"
+          },
+          "min_interval_seconds": {
+            "title": "Min Interval Seconds",
+            "type": "integer"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "reading_interval_seconds": {
+            "title": "Reading Interval Seconds",
+            "type": "integer"
+          },
+          "safety_bps": {
+            "title": "Safety Bps",
+            "type": "integer"
+          },
+          "simulated_meters": {
+            "const": true,
+            "default": true,
+            "title": "Simulated Meters",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "chain_id",
+          "energy_token",
+          "meter_registry",
+          "reading_interval_seconds",
+          "min_interval_seconds",
+          "max_interval_seconds",
+          "safety_bps",
+          "note"
+        ],
+        "title": "PublicConfig",
+        "type": "object"
+      },
+      "ReadingAccepted": {
+        "properties": {
+          "duplicate": {
+            "title": "Duplicate",
+            "type": "boolean"
+          },
+          "reading": {
+            "$ref": "#/components/schemas/ReadingOut"
+          }
+        },
+        "required": [
+          "reading",
+          "duplicate"
+        ],
+        "title": "ReadingAccepted",
+        "type": "object"
+      },
+      "ReadingIn": {
+        "additionalProperties": false,
+        "properties": {
+          "amount_wh": {
+            "exclusiveMaximum": 9.223372036854776e+18,
+            "minimum": 1.0,
+            "title": "Amount Wh",
+            "type": "integer"
+          },
+          "interval_seconds": {
+            "maximum": 604800.0,
+            "minimum": 1.0,
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "interval_start": {
+            "exclusiveMaximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Interval Start",
+            "type": "integer"
+          },
+          "meter_id": {
+            "title": "Meter Id",
+            "type": "string"
+          },
+          "reading_id": {
+            "title": "Reading Id",
+            "type": "string"
+          },
+          "signature": {
+            "title": "Signature",
+            "type": "string"
+          },
+          "simulated": {
+            "default": false,
+            "title": "Simulated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "meter_id",
+          "reading_id",
+          "amount_wh",
+          "interval_start",
+          "interval_seconds",
+          "signature"
+        ],
+        "title": "ReadingIn",
+        "type": "object"
+      },
+      "ReadingOut": {
+        "properties": {
+          "amount_wh": {
+            "title": "Amount Wh",
+            "type": "integer"
+          },
+          "interval_seconds": {
+            "title": "Interval Seconds",
+            "type": "integer"
+          },
+          "interval_start": {
+            "title": "Interval Start",
+            "type": "integer"
+          },
+          "meter_id": {
+            "title": "Meter Id",
+            "type": "string"
+          },
+          "mint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MintOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reading_id": {
+            "title": "Reading Id",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reading_id",
+          "meter_id",
+          "amount_wh",
+          "interval_start",
+          "interval_seconds",
+          "received_at",
+          "mint"
+        ],
+        "title": "ReadingOut",
+        "type": "object"
+      },
+      "ReadingsPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReadingOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_before": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "opaque cursor for ?before=",
+            "title": "Next Before"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ReadingsPage",
+        "type": "object"
+      },
+      "RegionOut": {
+        "properties": {
+          "max_lat_e6": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lat E6"
+          },
+          "max_lon_e6": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Lon E6"
+          },
+          "min_lat_e6": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lat E6"
+          },
+          "min_lon_e6": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Lon E6"
+          }
+        },
+        "required": [
+          "min_lat_e6",
+          "max_lat_e6",
+          "min_lon_e6",
+          "max_lon_e6"
+        ],
+        "title": "RegionOut",
+        "type": "object"
+      },
+      "TradeOut": {
+        "properties": {
+          "block_number": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Block Number"
+          },
+          "buyer": {
+            "title": "Buyer",
+            "type": "string"
+          },
+          "cost": {
+            "title": "Cost",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "exec_price": {
+            "title": "Exec Price",
+            "type": "string"
+          },
+          "executed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executed At"
+          },
+          "external": {
+            "title": "External",
+            "type": "boolean"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "fee": {
+            "title": "Fee",
+            "type": "string"
+          },
+          "fill_wh": {
+            "title": "Fill Wh",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "market_id": {
+            "title": "Market Id",
+            "type": "string"
+          },
+          "seller": {
+            "title": "Seller",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "matched",
+              "submitted",
+              "confirmed",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tx_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Hash"
+          }
+        },
+        "required": [
+          "id",
+          "market_id",
+          "buyer",
+          "seller",
+          "fill_wh",
+          "exec_price",
+          "cost",
+          "fee",
+          "status",
+          "failure_reason",
+          "tx_hash",
+          "block_number",
+          "executed_at",
+          "created_at",
+          "external"
+        ],
+        "title": "TradeOut",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "address",
+          "role"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "WattSwap API",
+    "version": "0.2.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/admin/markets": {
+      "post": {
+        "description": "Define a market. Its id is keccak256(name), the convention the exchange uses; it also\nhas to be enabled on-chain by the exchange admin (`setMarket`).",
+        "operationId": "create_market_api_v1_admin_markets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Market",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/markets/{market_id}": {
+      "patch": {
+        "operationId": "patch_market_api_v1_admin_markets__market_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarketPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Market",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/pricing/breaker/reset": {
+      "post": {
+        "description": "Queue a manual breaker reset; the engine applies it on its next tick.",
+        "operationId": "reset_breaker_api_v1_admin_pricing_breaker_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BreakerResetIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reset Breaker Api V1 Admin Pricing Breaker Reset Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reset Breaker",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/pricing/config": {
+      "get": {
+        "operationId": "get_config_api_v1_admin_pricing_config_get",
+        "parameters": [
+          {
+            "description": "omit for the global scope",
+            "in": "query",
+            "name": "market_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "omit for the global scope",
+              "title": "Market Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Config",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "put_config_api_v1_admin_pricing_config_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Config",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/pricing/events": {
+      "get": {
+        "description": "Breaker transitions and anomaly events, newest first.",
+        "operationId": "pricing_events_api_v1_admin_pricing_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Pricing Events Api V1 Admin Pricing Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pricing Events",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/pricing/state": {
+      "get": {
+        "description": "Breaker, per-cell weather age, last tick and last oracle push (written by the engine).",
+        "operationId": "pricing_state_api_v1_admin_pricing_state_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Pricing State Api V1 Admin Pricing State Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pricing State",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/trading/pause": {
+      "post": {
+        "description": "Stop matching and submitting new settlements. In-flight transactions are still tracked.",
+        "operationId": "pause_api_v1_admin_trading_pause_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Pause Api V1 Admin Trading Pause Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pause",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/trading/resume": {
+      "post": {
+        "operationId": "resume_api_v1_admin_trading_resume_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resume Api V1 Admin Trading Resume Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Resume",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/trading/state": {
+      "get": {
+        "operationId": "state_api_v1_admin_trading_state_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response State Api V1 Admin Trading State Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "State",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login_api_v1_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "description": "Revoke the presented token (Redis denylist) and clear the cookie.",
+        "operationId": "logout_api_v1_auth_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Logout",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "me_api_v1_auth_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/nonce": {
+      "get": {
+        "operationId": "get_nonce_api_v1_auth_nonce_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NonceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Nonce",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/config": {
+      "get": {
+        "description": "Non-secret deployment info for clients and the meter simulator.",
+        "operationId": "public_config_api_v1_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Public Config",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/api/v1/markets": {
+      "get": {
+        "operationId": "list_markets_api_v1_markets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MarketOut"
+                  },
+                  "title": "Response List Markets Api V1 Markets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Markets",
+        "tags": [
+          "markets"
+        ]
+      }
+    },
+    "/api/v1/markets/{market_id}/book": {
+      "get": {
+        "description": "Aggregated price levels (no maker addresses).",
+        "operationId": "book_api_v1_markets__market_id__book_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BookOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Book",
+        "tags": [
+          "trading"
+        ]
+      }
+    },
+    "/api/v1/markets/{market_id}/forecast": {
+      "get": {
+        "description": "Hourly supply, demand and implied raw price for the next 24 hours.",
+        "operationId": "forecast_api_v1_markets__market_id__forecast_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Forecast Api V1 Markets  Market Id  Forecast Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Forecast",
+        "tags": [
+          "markets"
+        ]
+      }
+    },
+    "/api/v1/markets/{market_id}/order-config": {
+      "get": {
+        "description": "Everything a client needs to build, sign and (if it wants a binding cancel) cancel an order.",
+        "operationId": "order_config_api_v1_markets__market_id__order_config_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Order Config",
+        "tags": [
+          "trading"
+        ]
+      }
+    },
+    "/api/v1/markets/{market_id}/price": {
+      "get": {
+        "description": "The latest tick with its price drivers and the signed quote the relayer uses.",
+        "operationId": "latest_price_api_v1_markets__market_id__price_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Latest Price Api V1 Markets  Market Id  Price Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Latest Price",
+        "tags": [
+          "markets"
+        ]
+      }
+    },
+    "/api/v1/markets/{market_id}/ticks": {
+      "get": {
+        "operationId": "ticks_api_v1_markets__market_id__ticks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
+            }
+          },
+          {
+            "description": "include the full price-drivers breakdown",
+            "in": "query",
+            "name": "drivers",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "include the full price-drivers breakdown",
+              "title": "Drivers",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ticks Api V1 Markets  Market Id  Ticks Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ticks",
+        "tags": [
+          "markets"
+        ]
+      }
+    },
+    "/api/v1/markets/{market_id}/trades": {
+      "get": {
+        "description": "Confirmed trades only, newest first. The next page cursor is in `X-Next-Cursor`.",
+        "operationId": "tape_api_v1_markets__market_id__trades_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "market_id",
+            "required": true,
+            "schema": {
+              "title": "Market Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TradeOut"
+                  },
+                  "title": "Response Tape Api V1 Markets  Market Id  Trades Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Tape",
+        "tags": [
+          "trading"
+        ]
+      }
+    },
+    "/api/v1/meters": {
+      "get": {
+        "operationId": "list_meters_api_v1_meters_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/MeterOut"
+                  },
+                  "title": "Response List Meters Api V1 Meters Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Meters",
+        "tags": [
+          "meters"
+        ]
+      },
+      "post": {
+        "description": "Register a (simulated) meter on-chain. The user supplies only the device *address*;\nthe device key never leaves the device.",
+        "operationId": "create_meter_api_v1_meters_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeterCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeterOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Meter",
+        "tags": [
+          "meters"
+        ]
+      }
+    },
+    "/api/v1/meters/{meter_ref}": {
+      "get": {
+        "operationId": "get_meter_api_v1_meters__meter_ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "meter_ref",
+            "required": true,
+            "schema": {
+              "title": "Meter Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeterOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Meter",
+        "tags": [
+          "meters"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_meter_api_v1_meters__meter_ref__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "meter_ref",
+            "required": true,
+            "schema": {
+              "title": "Meter Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeterPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeterOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Meter",
+        "tags": [
+          "meters"
+        ]
+      }
+    },
+    "/api/v1/meters/{meter_ref}/readings": {
+      "get": {
+        "description": "Readings newest-first with their mint status; page with `next_before`.",
+        "operationId": "list_readings_api_v1_meters__meter_ref__readings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "meter_ref",
+            "required": true,
+            "schema": {
+              "title": "Meter Ref",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadingsPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Readings",
+        "tags": [
+          "meters"
+        ]
+      }
+    },
+    "/api/v1/mints": {
+      "get": {
+        "operationId": "list_mints_api_v1_mints_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintsPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mints",
+        "tags": [
+          "readings"
+        ]
+      }
+    },
+    "/api/v1/orders": {
+      "get": {
+        "operationId": "my_orders_api_v1_orders_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OrderStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "market",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Market"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/OrderOut"
+                  },
+                  "title": "Response My Orders Api V1 Orders Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Orders",
+        "tags": [
+          "trading"
+        ]
+      },
+      "post": {
+        "operationId": "place_order_api_v1_orders_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Place Order",
+        "tags": [
+          "trading"
+        ]
+      }
+    },
+    "/api/v1/orders/{order_hash}": {
+      "delete": {
+        "description": "Soft, server-side cancel. Reserved (in-flight) Wh are never cancelled; see the response.",
+        "operationId": "cancel_order_api_v1_orders__order_hash__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_hash",
+            "required": true,
+            "schema": {
+              "title": "Order Hash",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Order",
+        "tags": [
+          "trading"
+        ]
+      },
+      "get": {
+        "operationId": "get_order_api_v1_orders__order_hash__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_hash",
+            "required": true,
+            "schema": {
+              "title": "Order Hash",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Order",
+        "tags": [
+          "trading"
+        ]
+      }
+    },
+    "/api/v1/portfolio": {
+      "get": {
+        "description": "Exact totals over ALL of the caller's rows in the window. Definitions: docs/api.md.",
+        "operationId": "portfolio_api_v1_portfolio_get",
+        "parameters": [
+          {
+            "description": "Window applied to executed_at / confirmed_at",
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "description": "Window applied to executed_at / confirmed_at",
+              "enum": [
+                "24h",
+                "7d",
+                "30d",
+                "all"
+              ],
+              "title": "Period",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Portfolio",
+        "tags": [
+          "portfolio"
+        ]
+      }
+    },
+    "/api/v1/readings": {
+      "post": {
+        "description": "Ingest an EIP-712 signed reading from a meter.\n\nAuthenticity is the device signature, not a session cookie. Re-sending the same reading\nis safe: it returns 200 with the existing record and never queues a second mint.",
+        "operationId": "post_reading_api_v1_readings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadingIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadingAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Reading",
+        "tags": [
+          "readings"
+        ]
+      }
+    },
+    "/api/v1/trades": {
+      "get": {
+        "description": "The caller's trades in every state, newest first, with the settlement status and failure\nreason. The next page cursor is in `X-Next-Cursor` (absent on the last page).",
+        "operationId": "my_trades_api_v1_trades_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TradeOut"
+                  },
+                  "title": "Response My Trades Api V1 Trades Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "My Trades",
+        "tags": [
+          "trading"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Liveness: the process is up.",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "metrics_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Metrics",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Readiness: Postgres, Redis, the RPC node and the on-chain role wiring.",
+        "operationId": "ready_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "system"
+        ]
+      }
+    }
+  }
+}
