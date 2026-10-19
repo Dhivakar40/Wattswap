@@ -1,11 +1,13 @@
 """Meter registry endpoints."""
 
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Query
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
 from app.auth.deps import SessionDep, UserDep
+from app.core.pagination import CURSOR_DOC, decode_cursor, encode_cursor
 from app.core.state import ChainDep, SettingsDep
 from app.models import Meter, Mint, Reading, User, UserRole
 from app.schemas.api import MeterCreate, MeterOut, MeterPatch, ReadingsPage
@@ -76,7 +78,7 @@ async def list_readings(
     user: UserDep,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    before: Annotated[int | None, Query(ge=0, description="interval_start cursor")] = None,
+    before: Annotated[str | None, Query(description=CURSOR_DOC)] = None,
 ) -> ReadingsPage:
     """Readings newest-first with their mint status; page with `next_before`."""
     meter, _ = await get_owned_meter(session, user, meter_ref)
@@ -84,14 +86,17 @@ async def list_readings(
         select(Reading, Mint)
         .outerjoin(Mint, Mint.reading_pk == Reading.id)
         .where(Reading.meter_pk == meter.id)
-        .order_by(Reading.interval_start.desc())
+        .order_by(Reading.interval_start.desc(), Reading.id.desc())
         .limit(limit + 1)
     )
     if before is not None:
-        stmt = stmt.where(Reading.interval_start < before)
+        c = decode_cursor(before, key="int", id_type=uuid.UUID)
+        stmt = stmt.where(tuple_(Reading.interval_start, Reading.id) < tuple_(c.key, c.id))
     rows = (await session.execute(stmt)).all()
     page = rows[:limit]
-    next_before = page[-1][0].interval_start if len(rows) > limit else None
+    next_before = (
+        encode_cursor(page[-1][0].interval_start, page[-1][0].id) if len(rows) > limit else None
+    )
     return ReadingsPage(
         items=[reading_out(r, meter.meter_id, m) for r, m in page], next_before=next_before
     )

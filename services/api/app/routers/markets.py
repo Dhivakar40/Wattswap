@@ -4,10 +4,11 @@ import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
 from app.auth.deps import SessionDep
 from app.core.errors import AppError
+from app.core.pagination import CURSOR_DOC, decode_cursor, encode_cursor
 from app.core.ratelimit import ip_limit
 from app.core.state import RedisDep
 from app.models import Market, PriceTick
@@ -64,7 +65,7 @@ async def latest_price(market_id: str, session: SessionDep, redis: RedisDep) -> 
     row = await session.scalar(
         select(PriceTick)
         .where(PriceTick.market_id == market.market_id)
-        .order_by(PriceTick.ts.desc())
+        .order_by(PriceTick.ts.desc(), PriceTick.id.desc())
         .limit(1)
     )
     if row is None:
@@ -77,11 +78,9 @@ async def ticks(
     market_id: str,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
-    before: Annotated[int | None, Query(ge=0, description="unix ts cursor")] = None,
+    before: Annotated[str | None, Query(description=CURSOR_DOC)] = None,
     drivers: Annotated[bool, Query(description="include the full price-drivers breakdown")] = False,
 ) -> dict[str, Any]:
-    from datetime import UTC, datetime
-
     market = await require_market(session, market_id)
     stmt = (
         select(PriceTick)
@@ -90,12 +89,13 @@ async def ticks(
         .limit(limit + 1)
     )
     if before is not None:
-        stmt = stmt.where(PriceTick.ts < datetime.fromtimestamp(before, UTC))
+        c = decode_cursor(before, key="time", id_type=int)
+        stmt = stmt.where(tuple_(PriceTick.ts, PriceTick.id) < tuple_(c.key, c.id))
     rows = list((await session.scalars(stmt)).all())
     page = rows[:limit]
     return {
         "items": [repo.tick_row_json(r, with_drivers=drivers) for r in page],
-        "next_before": int(page[-1].ts.timestamp()) if len(rows) > limit else None,
+        "next_before": encode_cursor(page[-1].ts, page[-1].id) if len(rows) > limit else None,
     }
 
 

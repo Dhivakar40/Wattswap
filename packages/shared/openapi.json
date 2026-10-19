@@ -843,19 +843,18 @@
           "next_before": {
             "anyOf": [
               {
-                "format": "date-time",
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
+            "description": "opaque cursor for ?before=",
             "title": "Next Before"
           }
         },
         "required": [
-          "items",
-          "next_before"
+          "items"
         ],
         "title": "MintsPage",
         "type": "object"
@@ -1508,18 +1507,18 @@
           "next_before": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
+            "description": "opaque cursor for ?before=",
             "title": "Next Before"
           }
         },
         "required": [
-          "items",
-          "next_before"
+          "items"
         ],
         "title": "ReadingsPage",
         "type": "object"
@@ -2537,21 +2536,20 @@
             }
           },
           {
-            "description": "unix ts cursor",
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
             "in": "query",
             "name": "before",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "unix ts cursor",
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
               "title": "Before"
             }
           },
@@ -2600,7 +2598,7 @@
     },
     "/api/v1/markets/{market_id}/trades": {
       "get": {
-        "description": "Confirmed trades only.",
+        "description": "Confirmed trades only, newest first. The next page cursor is in `X-Next-Cursor`.",
         "operationId": "tape_api_v1_markets__market_id__trades_get",
         "parameters": [
           {
@@ -2625,21 +2623,20 @@
             }
           },
           {
-            "description": "unix ts cursor",
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
             "in": "query",
             "name": "before",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "unix ts cursor",
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
               "title": "Before"
             }
           }
@@ -2860,21 +2857,20 @@
             }
           },
           {
-            "description": "interval_start cursor",
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
             "in": "query",
             "name": "before",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "interval_start cursor",
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
               "title": "Before"
             }
           }
@@ -2924,21 +2920,20 @@
             }
           },
           {
-            "description": "created_at cursor",
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
             "in": "query",
             "name": "before",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "format": "date-time",
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "created_at cursor",
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
               "title": "Before"
             }
           }
@@ -3020,20 +3015,21 @@
             }
           },
           {
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
             "in": "query",
-            "name": "before_seq",
+            "name": "before",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "minimum": 0,
-                  "type": "integer"
+                  "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Before Seq"
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
+              "title": "Before"
             }
           }
         ],
@@ -3287,7 +3283,7 @@
     },
     "/api/v1/trades": {
       "get": {
-        "description": "The caller's trades in every state, newest first, with the settlement status and failure\nreason. Page with `before` = the last item's `created_at`.",
+        "description": "The caller's trades in every state, newest first, with the settlement status and failure\nreason. The next page cursor is in `X-Next-Cursor` (absent on the last page).",
         "operationId": "my_trades_api_v1_trades_get",
         "parameters": [
           {
@@ -3303,21 +3299,20 @@
             }
           },
           {
-            "description": "created_at cursor: only older trades",
+            "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
             "in": "query",
             "name": "before",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "format": "date-time",
                   "type": "string"
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "created_at cursor: only older trades",
+              "description": "Opaque cursor from the previous page (X-Next-Cursor header or next_before)",
               "title": "Before"
             }
           }

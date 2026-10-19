@@ -20,7 +20,8 @@ def main(argv: list[str]) -> int:
         print("usage: export_openapi <output.json>", file=sys.stderr)
         return 2
     schema = create_app().openapi()
-    Path(argv[1]).write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    text = json.dumps(schema, indent=2, sort_keys=True) + "\n"
+    Path(argv[1]).write_bytes(text.encode("utf-8"))  # LF on every OS: stable for the drift check
     return 0
 
 

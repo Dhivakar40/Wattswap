@@ -388,7 +388,7 @@ export interface paths {
         };
         /**
          * Tape
-         * @description Confirmed trades only.
+         * @description Confirmed trades only, newest first. The next page cursor is in `X-Next-Cursor`.
          */
         get: operations["tape_api_v1_markets__market_id__trades_get"];
         put?: never;
@@ -568,7 +568,7 @@ export interface paths {
         /**
          * My Trades
          * @description The caller's trades in every state, newest first, with the settlement status and failure
-         *     reason. Page with `before` = the last item's `created_at`.
+         *     reason. The next page cursor is in `X-Next-Cursor` (absent on the last page).
          */
         get: operations["my_trades_api_v1_trades_get"];
         put?: never;
@@ -925,8 +925,11 @@ export interface components {
         MintsPage: {
             /** Items */
             items: components["schemas"]["MintItem"][];
-            /** Next Before */
-            next_before: string | null;
+            /**
+             * Next Before
+             * @description opaque cursor for ?before=
+             */
+            next_before?: string | null;
         };
         /** NonceOut */
         NonceOut: {
@@ -1209,8 +1212,11 @@ export interface components {
         ReadingsPage: {
             /** Items */
             items: components["schemas"]["ReadingOut"][];
-            /** Next Before */
-            next_before: number | null;
+            /**
+             * Next Before
+             * @description opaque cursor for ?before=
+             */
+            next_before?: string | null;
         };
         /** RegionOut */
         RegionOut: {
@@ -1865,8 +1871,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description unix ts cursor */
-                before?: number | null;
+                /** @description Opaque cursor from the previous page (X-Next-Cursor header or next_before) */
+                before?: string | null;
                 /** @description include the full price-drivers breakdown */
                 drivers?: boolean;
             };
@@ -1904,8 +1910,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description unix ts cursor */
-                before?: number | null;
+                /** @description Opaque cursor from the previous page (X-Next-Cursor header or next_before) */
+                before?: string | null;
             };
             header?: never;
             path: {
@@ -2058,8 +2064,8 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description interval_start cursor */
-                before?: number | null;
+                /** @description Opaque cursor from the previous page (X-Next-Cursor header or next_before) */
+                before?: string | null;
             };
             header?: never;
             path: {
@@ -2093,7 +2099,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description created_at cursor */
+                /** @description Opaque cursor from the previous page (X-Next-Cursor header or next_before) */
                 before?: string | null;
             };
             header?: never;
@@ -2128,7 +2134,8 @@ export interface operations {
                 status?: components["schemas"]["OrderStatus"] | null;
                 market?: string | null;
                 limit?: number;
-                before_seq?: number | null;
+                /** @description Opaque cursor from the previous page (X-Next-Cursor header or next_before) */
+                before?: string | null;
             };
             header?: never;
             path?: never;
@@ -2320,7 +2327,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description created_at cursor: only older trades */
+                /** @description Opaque cursor from the previous page (X-Next-Cursor header or next_before) */
                 before?: string | null;
             };
             header?: never;

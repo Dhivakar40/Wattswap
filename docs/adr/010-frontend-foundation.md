@@ -31,10 +31,10 @@ Status: accepted (the owner approved the plan and its three recommendations).
 
 ## Consequences and limits
 
-- `produced` on the dashboard refreshes on `user:` events, window focus and re-snapshots, not on every mint: `meter:{id}` has
-  no REST snapshot endpoint yet, so it cannot use the snapshot+delta machine (6b adds one with the Meters page).
-- `/trades` and `/mints` use a `created_at` cursor; two rows with an identical timestamp at a page boundary could be skipped.
-  The matcher stamps trades individually, and the portfolio totals do not depend on pagination.
+- Mint status changes are published to `user:{owner}` as well as `meter:{id}` (same body), so `produced` on the dashboard
+  updates live on every mint without needing `meter:` channels (which have no REST snapshot yet).
+- Every paginated list uses an opaque keyset cursor on `(sort key, id)` (`app/core/pagination.py`), added after review:
+  the first version used `created_at` alone and could skip rows that share a timestamp at a page boundary.
 - The price endpoint returns an open-ended object; the client reads only the fields it uses, through a strict runtime parser.
 - The production build prints a webpack "critical dependency" warning from a third-party package inside wagmi/RainbowKit
   (an expression in a `require`); it does not affect behaviour. The unresolvable optional `@x402/*` peers of Coinbase's SDK

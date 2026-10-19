@@ -1,12 +1,13 @@
 """Reading ingest (device-signed) and mint history."""
 
-from datetime import datetime
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
 from app.auth.deps import SessionDep, UserDep
+from app.core.pagination import CURSOR_DOC, decode_cursor, encode_cursor
 from app.core.ratelimit import hit, ip_limit
 from app.core.state import ChainDep, RedisDep, SettingsDep
 from app.models import Meter, Mint, Reading, User, UserRole
@@ -59,19 +60,20 @@ async def list_mints(
     user: UserDep,
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    before: Annotated[datetime | None, Query(description="created_at cursor")] = None,
+    before: Annotated[str | None, Query(description=CURSOR_DOC)] = None,
 ) -> MintsPage:
     stmt = (
         select(Mint, Reading, Meter.meter_id)
         .join(Reading, Reading.id == Mint.reading_pk)
         .join(Meter, Meter.id == Reading.meter_pk)
-        .order_by(Mint.created_at.desc())
+        .order_by(Mint.created_at.desc(), Mint.id.desc())
         .limit(limit + 1)
     )
     if user.role != UserRole.ADMIN:
         stmt = stmt.join(User, User.id == Meter.owner_id).where(User.id == user.id)
     if before is not None:
-        stmt = stmt.where(Mint.created_at < before)
+        c = decode_cursor(before, key="time", id_type=uuid.UUID)
+        stmt = stmt.where(tuple_(Mint.created_at, Mint.id) < tuple_(c.key, c.id))
     rows = (await session.execute(stmt)).all()
     page = rows[:limit]
     return MintsPage(
@@ -86,5 +88,7 @@ async def list_mints(
             )
             for m, r, meter_id in page
         ],
-        next_before=page[-1][0].created_at if len(rows) > limit else None,
+        next_before=(
+            encode_cursor(page[-1][0].created_at, page[-1][0].id) if len(rows) > limit else None
+        ),
     )

@@ -50,16 +50,14 @@ def _order(maker: User, side: OrderSide) -> Order:
 
 async def _all_trades(h: Harness, headers: dict[str, str]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    before: str | None = None
+    cursor: str | None = None
     while True:
-        params: dict[str, Any] = {"limit": 50}
-        if before:
-            params["before"] = before
-        page = (await h.client.get("/api/v1/trades", params=params, headers=headers)).json()
-        if not page:
+        params: dict[str, Any] = {"limit": 50, **({"before": cursor} if cursor else {})}
+        r = await h.client.get("/api/v1/trades", params=params, headers=headers)
+        out += r.json()
+        cursor = r.headers.get("x-next-cursor")
+        if cursor is None:
             return out
-        out += page
-        before = page[-1]["created_at"]
 
 
 async def _all_mints(h: Harness, headers: dict[str, str]) -> list[dict[str, Any]]:
