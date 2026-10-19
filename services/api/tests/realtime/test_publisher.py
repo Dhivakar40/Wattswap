@@ -98,7 +98,7 @@ async def test_resync_reasons(redis: aioredis.Redis) -> None:
             await publisher.publish(redis, CH, "price", {"i": i})
     finally:
         channels.configure_retention({Kind.PRICE: saved})
-    # MAXLEN ~ trims in whole nodes, so the window is "at least 5, at most a node more"
+
     assert (await streams.read_since(redis, CH, 2, max_messages=100)).resync == "too_old"
     assert (await streams.read_since(redis, CH, 99, max_messages=100)).resync == "ahead_of_head"
     assert (await streams.read_since(redis, CH, 0, max_messages=3)).resync == "too_many"

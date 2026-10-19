@@ -7,6 +7,10 @@ map to one cluster slot and the publish script stays valid on Redis Cluster.
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
 
 MARKET_ID = re.compile(r"^0x[0-9a-f]{64}$")
 METER_ID = MARKET_ID
@@ -106,3 +110,17 @@ def stream_key(name: str) -> str:
 
 def latest_key(name: str) -> str:
     return f"{tag(name)}:latest"
+
+
+def retention_from_settings(settings: "Settings") -> dict[Kind, Retention]:
+    public = Retention(settings.ws_retain_public_len, settings.ws_retain_public_age_seconds)
+    user = Retention(settings.ws_retain_user_len, settings.ws_retain_user_age_seconds)
+    price = Retention(settings.ws_retain_price_len, settings.ws_retain_price_age_seconds)
+    return {
+        Kind.PRICE: price,
+        Kind.FORECAST: Retention(50, price.max_age_s),
+        Kind.ORDERBOOK: public,
+        Kind.TRADES: public,
+        Kind.USER: user,
+        Kind.METER: user,
+    }

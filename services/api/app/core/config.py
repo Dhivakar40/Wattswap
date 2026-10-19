@@ -140,6 +140,41 @@ class Settings(BaseSettings):
     rate_limit_user: int = Field(default=120, ge=1)
     rate_limit_meter_ingest: int = Field(default=60, ge=1)
 
+    # --- WebSocket gateway (Phase 5) ------------------------------------------------------
+    # Origins allowed to open /ws besides API_CORS_ORIGINS (comma-separated).
+    ws_extra_origins: str = ""
+    ws_max_subscriptions: int = Field(default=20, ge=1)
+    ws_max_message_bytes: int = Field(default=4096, ge=64)
+    ws_rate_per_window: int = Field(default=20, ge=1)  # sustained inbound messages per window
+    ws_rate_window_seconds: float = Field(default=10.0, gt=0)
+    ws_rate_burst: int = Field(default=40, ge=1)
+    ws_rate_strikes: int = Field(default=3, ge=1)  # rate-limit errors before 4429
+    ws_max_conn_per_ip: int = Field(default=20, ge=1)
+    ws_max_conn_per_address: int = Field(default=10, ge=1)
+    ws_send_queue: int = Field(default=256, ge=2)
+    ws_send_timeout_seconds: float = Field(default=10.0, gt=0)
+    ws_ping_seconds: float = Field(default=20.0, gt=0)  # server ping; closed after 2 missed
+    ws_denylist_poll_seconds: float = Field(default=30.0, gt=0)
+    ws_resume_max_messages: int = Field(default=1000, ge=1)
+    # Retained stream windows (resume): count and age per channel class.
+    ws_retain_public_len: int = Field(default=5000, ge=10)
+    ws_retain_public_age_seconds: int = Field(default=600, ge=10)
+    ws_retain_user_len: int = Field(default=1000, ge=10)
+    ws_retain_user_age_seconds: int = Field(default=1800, ge=10)
+    ws_retain_price_len: int = Field(default=500, ge=10)
+    ws_retain_price_age_seconds: int = Field(default=3600, ge=10)
+
+    @property
+    def ws_origins(self) -> frozenset[str]:
+        extra = [o.strip() for o in self.ws_extra_origins.split(",") if o.strip()]
+        return frozenset(o.rstrip("/").lower() for o in [*self.cors_origins, *extra])
+
+    @property
+    def ws_allow_missing_origin(self) -> bool:
+        """A /ws handshake without an Origin header (a non-browser client) is accepted only when
+        API_ENV was EXPLICITLY set to "development". Unset, or any other value, refuses it."""
+        return "api_env" in self.model_fields_set and self.api_env == "development"
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]

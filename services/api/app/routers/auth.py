@@ -13,6 +13,7 @@ from app.auth.tokens import issue_token, revoke
 from app.core.config import Settings
 from app.core.ratelimit import ip_limit
 from app.models import User, UserRole
+from app.realtime.hub import announce_session_ended
 from app.schemas.api import LoginIn, NonceOut, UserOut
 from app.schemas.common import checksum
 
@@ -69,6 +70,7 @@ async def logout(request: Request, claims: ClaimsDep) -> Response:
     settings: Settings = request.app.state.settings
     redis: aioredis.Redis = request.app.state.redis
     await revoke(redis, claims)
+    await announce_session_ended(redis, claims.jti)  # close this session's sockets everywhere
     response = Response(status_code=204)
     response.delete_cookie(
         settings.session_cookie_name,

@@ -59,3 +59,16 @@ TX_HELD = Counter(
     "Transactions held back by the gas-price ceiling (not sent)",
     ["sender", "reason"],
 )
+
+# --- websocket gateway ------------------------------------------------------------------
+WS_CONNECTIONS = Gauge("wattswap_ws_connections", "Open WebSocket connections on this instance")
+WS_HANDSHAKES = Counter("wattswap_ws_handshakes_total", "WebSocket handshakes", ["result"])
+WS_CLOSES = Counter("wattswap_ws_closes_total", "WebSocket closes by code", ["code"])
+WS_SUBSCRIPTIONS = Gauge("wattswap_ws_subscriptions", "Channel subscriptions on this instance")
+WS_MESSAGES_OUT = Counter("wattswap_ws_messages_out_total", "Frames queued to clients", ["kind"])
+WS_QUEUE_DEPTH = Histogram(
+    "wattswap_ws_send_queue_depth",
+    "Per-connection send queue depth at enqueue",
+    buckets=(0, 1, 2, 4, 8, 16, 32, 64, 128, 256),
+)
+WS_RESUME = Counter("wattswap_ws_resume_total", "Resume/catch-up outcomes", ["outcome"])

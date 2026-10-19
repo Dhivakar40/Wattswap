@@ -5,7 +5,7 @@ could deliver seq 6 before seq 5 and a client would read that as a gap. Here the
 is allocated, the envelope retained (`XADD`, id = `<seq>-0`) and broadcast (`PUBLISH`) inside a
 single script, so delivery order on a channel always equals seq order.
 
-Retention is by count (`MAXLEN ~`) and by age (the oldest entries are deleted once older than the
+Retention is by count (exact `MAXLEN`) and by age (the oldest entries are deleted once older than the
 window), both per channel kind. Keys are hash-tagged per channel (see `channels`).
 """
 
@@ -24,7 +24,7 @@ _SCRIPT = """
 local seq = redis.call('INCR', KEYS[1])
 local body = '{"type":' .. ARGV[1] .. ',"channel":' .. ARGV[2] .. ',"seq":' .. seq
   .. ',"ts":' .. ARGV[3] .. ',"data":' .. ARGV[4] .. '}'
-redis.call('XADD', KEYS[2], 'MAXLEN', '~', ARGV[5], seq .. '-0', 'm', body, 't', ARGV[7])
+redis.call('XADD', KEYS[2], 'MAXLEN', ARGV[5], seq .. '-0', 'm', body, 't', ARGV[7])
 local cutoff = tonumber(ARGV[7]) - tonumber(ARGV[6])
 for _ = 1, 100 do
   local oldest = redis.call('XRANGE', KEYS[2], '-', '+', 'COUNT', 1)
