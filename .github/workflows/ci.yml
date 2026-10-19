@@ -100,4 +100,5 @@ jobs:
       - uses: actions/checkout@v4
       - run: cp .env.example .env
       - run: docker compose config --quiet
+      - run: docker compose --profile replica config --quiet  # second API replica (WebSocket fan-out)
       - run: docker compose build api web

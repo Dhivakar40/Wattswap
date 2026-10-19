@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from eth_account import Account
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_JWT_SECRET = "dev-only-insecure-jwt-secret-change-me-0123456789"  # noqa: S105
@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     session_cookie_name: str = "wattswap_session"
     # Cookies are always Secure. Browsers treat http://localhost as a secure context.
     session_cookie_secure: bool = True
+    # Host-only (None) is right when the app and API share a registrable domain: SameSite=Lax
+    # cookies flow between app.example.com and api.example.com because they are the same SITE.
+    # Set e.g. ".example.com" only if another subdomain must also receive the cookie.
+    session_cookie_domain: str | None = None
     siwe_domain: str = "localhost:3000"
     siwe_nonce_ttl_seconds: int = Field(default=300, ge=30)
     admin_addresses: str = ""
@@ -163,6 +167,11 @@ class Settings(BaseSettings):
     ws_retain_user_age_seconds: int = Field(default=1800, ge=10)
     ws_retain_price_len: int = Field(default=500, ge=10)
     ws_retain_price_age_seconds: int = Field(default=3600, ge=10)
+
+    @field_validator("session_cookie_domain")
+    @classmethod
+    def _empty_cookie_domain_is_host_only(cls, value: str | None) -> str | None:
+        return value or None  # `SESSION_COOKIE_DOMAIN=` in .env means "not set"
 
     @property
     def ws_origins(self) -> frozenset[str]:

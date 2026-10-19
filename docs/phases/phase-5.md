@@ -2,7 +2,7 @@
 
 Branch: `phase-5-realtime` · Target tag: `v0.5.0` (after approval)
 
-Status: **PLAN — awaiting "go".** Items marked **DECISION** are proposed defaults; say so if you want any changed.
+Status: **IMPLEMENTED — awaiting PR approval.** D1–D7 were approved with the amendments listed under *Owner changes*.
 
 ## Starting state (facts that shape the design)
 
@@ -187,3 +187,47 @@ No contract, migration or `packages/shared` changes expected.
 8. Two-replica pytest, compose `api2`, `ws-fanout-demo`.
 9. Load test + metrics.
 10. Docs, ADR, threat model, README, CI; full lint/test run; PR; §9 report.
+
+## Owner changes (applied)
+
+- D2: `X-Channel-Seq` is in `Access-Control-Expose-Headers`; tested (`test_snapshot_seq_header_is_readable_cross_origin`) at the HTTP level: allow-origin + allow-credentials + expose-headers present for the web origin, absent for a foreign origin. **No real browser was driven** (Playwright is Phase 7).
+- D3: missing Origin allowed only when the environment setting was explicitly `development`. The setting in this codebase is `API_ENV` (not `APP_ENV`); "unset" is detected through pydantic `model_fields_set`, because the field's default is `development`. Tested for unset / development / test / production, from kwargs and from the environment.
+- D7: ADR-009 "Deployment requirement" + `docs/phases/phase-8.md` checklist (new file). Added `SESSION_COOKIE_DOMAIN` (default host-only) so the Domain is explicit and tested.
+- Lua script keys are hash-tagged per channel (`{chan:<channel>}:seq|stream|latest`).
+- Concurrent-publisher regression test: `test_concurrent_publishers_deliver_strictly_increasing_seq_without_gaps` (500 messages from 20 connections arrive as exactly 1..500) plus `test_old_publisher_pattern_does_reorder`, which shows the Phase 4 INCR-then-PUBLISH pattern does reorder.
+
+## Outcome
+
+Built as planned, with these deviations: retention by count uses exact `MAXLEN` (approximate trimming kept ~100 extra entries, making the window unpredictable); the per-send `wait_for` timer was replaced by stall detection (see load results); the `/ws` connection cap is enforced after the upgrade (close `4429`) because a pre-upgrade refusal can only be HTTP 403; the `ws.close` code for Origin failure is therefore HTTP 403, not a WebSocket close code.
+
+Also fixed along the way: `MintWorker._resolve` fell through after confirming a mint and confirmed it a second time (a Phase 2 bug, found because it produced a duplicate `mint` message); the funding of `book` snapshots now carries `seq`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| Full API suite (`REQUIRE_SERVICES=1 uv run pytest`) | 492 passed, 12 m 15 s |
+| `tests/realtime` | 55 tests: publisher, gateway, auth/Origin/CORS, sync + resume + gap, replicas, streams, load smoke |
+| `ruff check`, `ruff format --check`, `mypy --strict` (app, tests, dev, loadtest, alembic) | clean |
+| `make ws-fanout-demo` (docker compose, `api` + `api2`) | PASS: trade driven through replica 2; clients on :8000 and :8001 saw identical `(channel, seq)` sequences |
+
+### Load test (`make ws-load`, 500 clients, one market, 1 500 B messages, 20 s)
+
+Machine: Windows 11 host, Docker Desktop, 22 logical cores, client + Redis + gateways + publisher all on it. Clients are Python `websockets`; loop-lag was ≤ 45 ms max, so the numbers are not dominated by the tool. Indicative only.
+
+| Topology | Publish rate | Deliveries/s | p50 | p95 | p99 | Lost / dup / out-of-order |
+|---|---|---|---|---|---|---|
+| 1 replica | 2 msg/s | ~1 000 | 60 ms | **149 ms** | 212 ms | 0 / 0 / 0 |
+| 1 replica | 10 msg/s | ~5 000 | 48 ms | **437 ms (over the 250 ms budget)** | 597 ms | 0 / 0 / 0 |
+| 2 replicas (250 each) | 10 msg/s | ~5 000 | 51 ms | **148 ms** | 181 ms | 0 / 0 / 0 |
+
+Reading: a single gateway fans out ~4–5 k frames/s before queueing delay shows; delivery is lossless and ordered at every rate. The 250 ms p95 budget holds for one replica up to roughly 5 msg/s to 500 clients and for two replicas at 10 msg/s. Real market traffic (a tick every 15 s plus order-book changes) is well under the first case. Tuning done: `--ws websockets-sansio` in the image, no per-send timer, per-frame metrics batched (single replica at 10 msg/s went from ~780 ms to ~380–440 ms p95 across runs).
+
+## Known limitations / tech debt
+
+- No stream epoch: a Redis flush followed by re-publishing past a client's old seq could replay wrong history (ADR-009, W-10).
+- Per-IP connection cap uses the socket peer address; behind a reverse proxy every client shares one IP (Phase 8 checklist).
+- Single gateway process is CPU-bound near 5 k frames/s; scale by replicas. Per-socket message coalescing is not implemented (book messages are state-replacing, so it would be safe to add).
+- Heartbeat liveness for a client that only reads is its `pong` replies; a client must answer pings.
+- CORS exposure of `X-Channel-Seq` verified by headers, not by a browser.
+- The load tool publishes synthetic `loadtest` messages onto the dev stack's real `orderbook:` channel.

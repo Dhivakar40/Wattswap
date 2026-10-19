@@ -60,6 +60,7 @@ async def login(
         secure=settings.session_cookie_secure,
         samesite="lax",
         path="/",
+        domain=settings.session_cookie_domain,
     )
     return _user_out(user)
 
@@ -78,6 +79,7 @@ async def logout(request: Request, claims: ClaimsDep) -> Response:
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",
+        domain=settings.session_cookie_domain,
     )
     return response
 

@@ -124,6 +124,23 @@ Residual: the relayer still chooses among valid matches and any price inside lim
 fail a settlement by moving funds after the pre-flight; it costs the relayer one failed transaction and gets that
 order cancelled as unfunded.
 
+## WebSocket gateway (Phase 5)
+
+Assets: other users' order/fill streams, the integrity of the book and price shown to clients, gateway availability.
+
+| ID | Threat | Mitigation | Tests |
+|---|---|---|---|
+| W-1 | Cross-site WebSocket hijacking: a malicious page opens `/ws` and the browser attaches the victim's session cookie | Exact Origin allow-list checked **before** the upgrade (HTTP 403); `SameSite=Lax` is defence in depth, not the control. Missing Origin accepted only with `API_ENV=development` explicitly set | `test_listed_origin_connects_foreign_origin_gets_403`, `test_cookie_with_foreign_origin_is_still_refused`, `test_missing_origin_*` |
+| W-2 | A user subscribes to another user's `user:` or `meter:` channel | Authorization at subscribe time against the JWT address / meter owner; the connection never joins the Redis subscription, so nothing can leak later | `test_user_channel_only_for_the_signed_in_address`, `test_meter_channel_is_owner_only_*` |
+| W-3 | A session ends (logout, expiry) but its open sockets keep streaming private data | Per-socket timer at JWT `exp`; logout broadcasts the `jti` to every replica; denylist re-check on the heartbeat if the broadcast is lost | `test_logout_closes_*`, `test_token_expiry_*`, `test_revocation_backstop_*`, `test_logout_on_one_replica_*` |
+| W-4 | Connection or subscription exhaustion (one client opens thousands) | Per-IP and per-address connection caps in Redis (self-healing slots), subscription cap per socket, known-market check so random channels cannot be created | `test_connection_cap_per_ip`, `test_subscription_cap` |
+| W-5 | Inbound flood / oversize / malformed frames | Size cap (4413), token-bucket rate with strikes (4429), strict Pydantic models with `extra=forbid`, channel names matched against anchored regexes before touching Redis | `test_oversize_frame_*`, `test_rate_limit_*`, `test_malformed_input_*` |
+| W-6 | Slow or stalled client makes the server buffer without bound or delays others | Bounded per-socket queue; overflow/stall closes only that socket (4409); fan-out is `put_nowait`, never awaiting a client | `test_slow_consumer_*`, `test_send_timeout_*` |
+| W-7 | Reordered, duplicated or missing messages make a client show a wrong book | Atomic seq+retain+publish script; clients require `seq == last+1`, drop duplicates, resync on gap; deltas idempotent; snapshot seq read before data; book publish serialised per market | `test_concurrent_publishers_*`, `test_lost_message_is_detected_*`, `test_concurrent_book_flushes_*` |
+| W-8 | Token leakage through URLs or logs | Cookie-only auth; no token in the query string or first message | by design (ADR-009) |
+| W-9 | Private order data in Redis streams | Redis is inside the trust boundary (not exposed; auth + network policy in production); user streams are short (30 min / 1 000 msgs) | n/a |
+| W-10 | Redis reset replays the wrong history to a resuming client | `ahead_of_head` detection and gap-checked replay; no stream epoch yet (known limitation) | `test_resume_ahead_of_head_*` |
+
 ## Known limitations / out of scope for Phase 1
 
 - No third-party audit. Do not deploy with real value.
