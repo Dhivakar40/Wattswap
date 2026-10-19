@@ -8,6 +8,7 @@
 # node
 node_modules/
 .next/
+.next-qa/
 out/
 dist/
 coverage/
@@ -43,3 +44,9 @@ docker-compose.override.yml
 contracts/lib/
 services/meter-sim/runtime/
 .meter-keys/
+
+# visual QA output (the PR keeps only the contact sheets)
+docs/screenshots/*/*.png
+!docs/screenshots/*/contact-*.png
+test-results/
+playwright-report/

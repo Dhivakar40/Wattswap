@@ -22,7 +22,7 @@ else
   FORGE := docker run --rm -v "$(CURDIR)/contracts:/work" -w /work --entrypoint forge $(FOUNDRY_IMAGE)
 endif
 
-.PHONY: help doctor env install up down logs ps build test lint fmt fmt-check clean \
+.PHONY: gen-api check-api-drift web-shots help doctor env install up down logs ps build test lint fmt fmt-check clean \
         test-contracts test-api test-meter-sim test-web test-shared \
         lint-contracts lint-api lint-meter-sim lint-web lint-shared \
         coverage-contracts slither export-abis deploy-local gen-vectors test-contracts-ci \
@@ -137,6 +137,15 @@ test-shared:
 	pnpm --filter @wattswap/shared test
 test-web:
 	pnpm --filter @wattswap/web test
+
+# ---- typed API client + visual QA -------------------------------------------------
+gen-api: ## Regenerate packages/shared/openapi.json from FastAPI and apps/web/src/lib/api/schema.d.ts
+	cd services/api && uv run python -m scripts.export_openapi ../../packages/shared/openapi.json
+	pnpm --filter @wattswap/web gen:api
+check-api-drift: gen-api ## Fail if the committed OpenAPI schema or generated client is stale
+	git diff --exit-code -- packages/shared/openapi.json apps/web/src/lib/api/schema.d.ts
+web-shots: ## Visual QA: build with /dev/ui, sign in with scripted Anvil wallets, screenshot 6a pages at 360/768/1440 x dark/light (needs the stack + `make sim trade-demo`)
+	pnpm --filter @wattswap/web shots
 
 # ---- lint / typecheck ------------------------------------------------------
 lint: lint-contracts lint-api lint-meter-sim lint-shared lint-web ## Lint + typecheck everything

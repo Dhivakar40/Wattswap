@@ -2,7 +2,7 @@
 
 Branches: `phase-6a-foundation` → PR → tag `v0.6.0`; then `phase-6b-pages` → PR → tag `v0.7.0` (tag numbering is the owner's call).
 
-Status: **PLANNED — awaiting "go".** Only 6a is implemented in the first session.
+Status: **6a IMPLEMENTED — awaiting PR approval.** 6b is planned below and not started. "go" given with the owner additions listed under *Owner changes*.
 
 ## Starting state
 
@@ -145,5 +145,27 @@ Vitest + RTL: amounts (incl. property tests), realtime sync + client (shared vec
 - **Admin** (role-gated): pricing parameters read/write, breaker status + reset, trading pause/resume, events log.
 - Gate: Lighthouse a11y ≥ 90 on every page, Vitest for hooks and the order-signing flow, screenshot sweep extended to the new pages.
 
-## Outcome
-_To be filled in when 6a is implemented (what was built, how to verify, limitations)._
+## Owner changes to the plan (approved with "go")
+
+1. `/portfolio`: every figure defined in `docs/api.md` (confirmed only; earnings = mUSDC received net of fees; produced = confirmed minted Wh); a test compares it with the fully paginated `/trades` and `/mints` for a user with 270 trades; the dashboard refreshes on `user:{address}` events (debounced), not by polling.
+2. Shared `ws-sync.json`; CI runs the pytest and the Vitest suites against the same file.
+3. Test wallet: Anvil dev keys only and it throws unless the chain id is 31337.
+4. SIWE cross-language gate: frontend-built messages are parsed and verified by the Python `siwe` library.
+
+## Outcome (6a)
+
+Built: see ADR-010 and the PR description. Deviations from the plan above: Geist fonts instead of Inter (ADR-010 §8); the connection status has no separate `offline` state (`idle` covers it); `/trades` also gained a `before` cursor (needed for the pagination test); the opaque `cn` npm dependency was replaced by a local helper.
+
+How to verify:
+
+```bash
+make up && make deploy-local && make sim   # let it mint a few readings, Ctrl-C
+make trade-demo
+make lint-api lint-web lint-shared
+cd services/api && uv run pytest -q -m "not integration" && cd ../.. && make test-integration
+make test-web test-shared
+make check-api-drift                       # clean tree after the commit
+make web-shots                             # needs port 3000 free; writes docs/screenshots/phase-6a/
+```
+
+Known limitations: see ADR-010 ("Consequences and limits"). 6b items (Trade, Meters, Insights, Activity, Settings, Admin, approve + EIP-712 signing preview, charts, Lighthouse gate) are untouched.
