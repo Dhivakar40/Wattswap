@@ -10,6 +10,7 @@ from app.auth.deps import SessionDep, UserDep
 from app.core.ratelimit import hit, ip_limit
 from app.core.state import ChainDep, RedisDep, SettingsDep
 from app.models import Meter, Mint, Reading, User, UserRole
+from app.realtime import meter_events
 from app.schemas.api import MintItem, MintsPage, ReadingAccepted, ReadingIn
 from app.services.readings import ingest_reading, mint_out
 
@@ -45,6 +46,11 @@ async def post_reading(
     reading, duplicate = await ingest_reading(session, chain, body)
     if duplicate:
         response.status_code = 200
+    else:
+        simulated = await session.scalar(
+            select(Meter.is_simulated).where(Meter.meter_id == body.meter_id)
+        )
+        await meter_events.publish_reading(redis, reading, simulated=bool(simulated))
     return ReadingAccepted(reading=reading, duplicate=duplicate)
 
 
