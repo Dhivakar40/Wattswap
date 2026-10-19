@@ -1,0 +1,99 @@
+{
+  "$comment": "Scenarios for the snapshot+delta state machine (docs/api.md, Staying consistent). Run by BOTH services/api/tests/realtime/test_sync_protocol.py (dev/ws_sync.py) and apps/web/tests/realtime-sync.test.ts (src/lib/realtime/sync.ts). State is a list of numbers; applying delta d appends d. Steps: message {epoch, seq, data} -> outcome; snapshot {epoch, seq, state} -> outcome; resync; resume_point -> object|null. check asserts observable fields after the step.",
+  "scenarios": [
+    {
+      "name": "deltas older than the snapshot are dropped, newer applied",
+      "steps": [
+        {"op": "message", "epoch": "E1", "seq": 3, "data": 3, "expect": "buffered"},
+        {"op": "message", "epoch": "E1", "seq": 4, "data": 4, "expect": "buffered"},
+        {"op": "message", "epoch": "E1", "seq": 5, "data": 5, "expect": "buffered"},
+        {"op": "message", "epoch": "E1", "seq": 6, "data": 6, "expect": "buffered"},
+        {"op": "snapshot", "epoch": "E1", "seq": 4, "state": [0], "expect": "applied",
+         "check": {"state": [0, 5, 6], "last_seq": 6, "syncing": false}},
+        {"op": "message", "epoch": "E1", "seq": 6, "data": 6, "expect": "duplicate"},
+        {"op": "message", "epoch": "E1", "seq": 7, "data": 7, "expect": "applied",
+         "check": {"state": [0, 5, 6, 7]}},
+        {"op": "resume_point", "expect": {"epoch": "E1", "seq": 7}}
+      ]
+    },
+    {
+      "name": "gap while live returns to syncing; a fresh snapshot recovers",
+      "steps": [
+        {"op": "snapshot", "epoch": "E1", "seq": 10, "state": [], "expect": "applied"},
+        {"op": "message", "epoch": "E1", "seq": 11, "data": 11, "expect": "applied"},
+        {"op": "message", "epoch": "E1", "seq": 13, "data": 13, "expect": "gap",
+         "check": {"syncing": true, "gaps": 1}},
+        {"op": "resume_point", "expect": null},
+        {"op": "message", "epoch": "E1", "seq": 14, "data": 14, "expect": "buffered",
+         "check": {"state": [11]}},
+        {"op": "snapshot", "epoch": "E1", "seq": 13, "state": [11, 12, 13], "expect": "applied",
+         "check": {"state": [11, 12, 13, 14], "last_seq": 14, "syncing": false}}
+      ]
+    },
+    {
+      "name": "snapshot older than the buffer needs another fetch",
+      "steps": [
+        {"op": "message", "epoch": "E1", "seq": 9, "data": 9, "expect": "buffered"},
+        {"op": "snapshot", "epoch": "E1", "seq": 5, "state": [0], "expect": "gap",
+         "check": {"syncing": true}},
+        {"op": "snapshot", "epoch": "E1", "seq": 8, "state": [0, 8], "expect": "applied",
+         "check": {"state": [0, 8, 9], "last_seq": 9, "syncing": false}}
+      ]
+    },
+    {
+      "name": "a resync frame discards the buffer",
+      "steps": [
+        {"op": "snapshot", "epoch": "E1", "seq": 1, "state": [], "expect": "applied"},
+        {"op": "resync"},
+        {"op": "resume_point", "expect": null},
+        {"op": "message", "epoch": "E1", "seq": 5, "data": 5, "expect": "buffered",
+         "check": {"syncing": true}}
+      ]
+    },
+    {
+      "name": "a new epoch is never mistaken for duplicates",
+      "steps": [
+        {"op": "snapshot", "epoch": "E1", "seq": 50, "state": [50], "expect": "applied"},
+        {"op": "message", "epoch": "E1", "seq": 51, "data": 51, "expect": "applied"},
+        {"op": "message", "epoch": "E2", "seq": 1, "data": 100, "expect": "epoch_changed",
+         "check": {"syncing": true, "epoch_changes": 1}},
+        {"op": "message", "epoch": "E2", "seq": 2, "data": 200, "expect": "buffered"},
+        {"op": "snapshot", "epoch": "E1", "seq": 60, "state": [60], "expect": "epoch_changed",
+         "check": {"syncing": true}},
+        {"op": "snapshot", "epoch": "E2", "seq": 1, "state": [100], "expect": "applied",
+         "check": {"state": [100, 200], "epoch": "E2", "last_seq": 2, "syncing": false}}
+      ]
+    },
+    {
+      "name": "while syncing nothing is applied, even a perfectly sequenced run",
+      "steps": [
+        {"op": "message", "epoch": "E1", "seq": 1, "data": 1, "expect": "buffered"},
+        {"op": "message", "epoch": "E1", "seq": 2, "data": 2, "expect": "buffered"},
+        {"op": "resume_point", "expect": null},
+        {"op": "snapshot", "epoch": "E1", "seq": 0, "state": [0], "expect": "applied",
+         "check": {"state": [0, 1, 2], "last_seq": 2}}
+      ]
+    },
+    {
+      "name": "live: duplicates and old seqs are ignored, state untouched",
+      "steps": [
+        {"op": "snapshot", "epoch": "E1", "seq": 7, "state": [7], "expect": "applied"},
+        {"op": "message", "epoch": "E1", "seq": 7, "data": 99, "expect": "duplicate"},
+        {"op": "message", "epoch": "E1", "seq": 3, "data": 99, "expect": "duplicate",
+         "check": {"state": [7], "last_seq": 7, "gaps": 0}}
+      ]
+    },
+    {
+      "name": "a gap then a stale-epoch buffer: the newest buffered message decides",
+      "steps": [
+        {"op": "snapshot", "epoch": "E1", "seq": 1, "state": [], "expect": "applied"},
+        {"op": "message", "epoch": "E1", "seq": 3, "data": 3, "expect": "gap"},
+        {"op": "message", "epoch": "E2", "seq": 1, "data": 9, "expect": "buffered"},
+        {"op": "snapshot", "epoch": "E1", "seq": 2, "state": [2], "expect": "epoch_changed",
+         "check": {"syncing": true}},
+        {"op": "snapshot", "epoch": "E2", "seq": 0, "state": [], "expect": "applied",
+         "check": {"state": [9], "epoch": "E2", "last_seq": 1}}
+      ]
+    }
+  ]
+}

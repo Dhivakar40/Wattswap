@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -80,6 +81,46 @@ def test_a_new_epoch_is_never_mistaken_for_duplicates() -> None:
     # ... and the post-reset one is applied, with its deltas
     assert s.load_snapshot(E2, 1, [100]) is Outcome.APPLIED
     assert s.state == [100, 200] and s.epoch == E2 and s.last_seq == 2
+
+
+# ------------------------------------------------ shared scenarios (also run by the web client)
+VECTORS = json.loads(
+    (Path(__file__).parents[4] / "packages" / "shared" / "vectors" / "ws-sync.json").read_text(
+        encoding="utf-8"
+    )
+)["scenarios"]
+
+
+@pytest.mark.parametrize("scenario", VECTORS, ids=[v["name"] for v in VECTORS])
+def test_shared_vectors(scenario: dict[str, Any]) -> None:
+    """packages/shared/vectors/ws-sync.json is the contract between this reference and the
+    TypeScript client (apps/web/tests/realtime-sync.test.ts runs the same file)."""
+    s = _sync()
+    for i, step in enumerate(scenario["steps"]):
+        where = f"{scenario['name']} step {i}: {step}"
+        match step["op"]:
+            case "message":
+                got = s.on_message(step["epoch"], step["seq"], step["data"])
+                assert got.value == step["expect"], where
+            case "snapshot":
+                got = s.load_snapshot(step["epoch"], step["seq"], list(step["state"]))
+                assert got.value == step["expect"], where
+            case "resync":
+                s.on_resync()
+            case "resume_point":
+                assert s.resume_point() == step["expect"], where
+            case other:
+                raise AssertionError(f"unknown op {other}")
+        observed = {
+            "state": s.state,
+            "epoch": s.epoch,
+            "last_seq": s.last_seq,
+            "syncing": s.syncing,
+            "gaps": s.gaps,
+            "epoch_changes": s.epoch_changes,
+        }
+        for key, want in step.get("check", {}).items():
+            assert observed[key] == want, f"{where}: {key}={observed[key]!r}"
 
 
 # ------------------------------------------------------------------------------------------ resume
