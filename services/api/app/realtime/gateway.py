@@ -169,19 +169,18 @@ class Gateway:
 
     # ------------------------------------------------------------------ writer / heartbeat
     async def _writer(self, conn: Connection) -> None:
+        # No per-send timer (that costs a task/timeout per frame per socket). A stalled send is
+        # detected instead by `Connection.enqueue`/the heartbeat via `sending_since`.
         while True:
             raw = await conn.queue.get()
+            conn.sending_since = time.monotonic()
             try:
-                await asyncio.wait_for(
-                    conn.ws.send_text(raw), self.settings.ws_send_timeout_seconds
-                )
-            except TimeoutError:
-                conn.close(Close.SLOW_CONSUMER, "slow_consumer")
-                return
+                await conn.ws.send_text(raw)
             except Exception:
                 # The peer is gone; the close code would be unobservable anyway.
                 conn.close(Close.NORMAL, "peer_gone")
                 return
+            conn.sending_since = None
             conn.sent += 1
 
     async def _heartbeat(self, conn: Connection) -> None:
@@ -192,6 +191,9 @@ class Gateway:
             now = time.monotonic()
             if now - conn.last_rx > interval * 2:
                 conn.close(Close.HEARTBEAT_TIMEOUT, "heartbeat_timeout")
+                return
+            if conn.send_stalled():
+                conn.close(Close.SLOW_CONSUMER, "slow_consumer")
                 return
             conn.send(protocol.PingFrame(ts=int(time.time())))
             with contextlib.suppress(Exception):

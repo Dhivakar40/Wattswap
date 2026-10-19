@@ -63,10 +63,12 @@ class Connection:
         self.opened_at = time.monotonic()
         self.queue_high_water = 0
         self.sent = 0
+        self.sending_since: float | None = None  # set while the writer is inside send_text
         self._tokens = float(settings.ws_rate_burst)
         self._refill_at = time.monotonic()
         self._strikes = 0
         self._catch_ups: set[asyncio.Task[None]] = set()
+        self._out: dict[str, int] = {}  # frames queued by kind; flushed to Prometheus on close
 
     # ------------------------------------------------------------------ closing
     def close(self, code: int, reason: str) -> None:
@@ -77,9 +79,18 @@ class Connection:
         self.close_reason = reason
         self.closed.set()
         WS_CLOSES.labels(str(code)).inc()
+        for kind, n in self._out.items():  # per-frame metric calls are too costly on the hot path
+            WS_MESSAGES_OUT.labels(kind).inc(n)
         log.info("ws closing", extra={"conn": self.id, "code": code, "reason": reason})
 
     # ------------------------------------------------------------------ outbound
+    def send_stalled(self) -> bool:
+        """The writer has been inside one send longer than `ws_send_timeout_seconds`."""
+        since = self.sending_since
+        return (
+            since is not None and time.monotonic() - since > self.settings.ws_send_timeout_seconds
+        )
+
     def enqueue(self, raw: str, kind: str = "data") -> None:
         if self.closed.is_set():
             return
@@ -89,9 +100,13 @@ class Connection:
             self.close(Close.SLOW_CONSUMER, "slow_consumer")
             return
         depth = self.queue.qsize()
-        self.queue_high_water = max(self.queue_high_water, depth)
-        WS_QUEUE_DEPTH.observe(depth)
-        WS_MESSAGES_OUT.labels(kind).inc()
+        if depth > self.queue_high_water:
+            self.queue_high_water = depth
+        if depth > 1 or self.sending_since is not None:
+            WS_QUEUE_DEPTH.observe(depth)  # only interesting when there is a backlog
+        self._out[kind] = self._out.get(kind, 0) + 1
+        if self.send_stalled():
+            self.close(Close.SLOW_CONSUMER, "slow_consumer")
 
     def send(self, frame: BaseModel) -> None:
         self.enqueue(protocol.dump(frame), type(frame).__name__.lower())

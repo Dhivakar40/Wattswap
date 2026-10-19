@@ -23,7 +23,7 @@ endif
         test-contracts test-api test-meter-sim test-web test-shared \
         lint-contracts lint-api lint-meter-sim lint-web lint-shared \
         coverage-contracts slither export-abis deploy-local gen-vectors test-contracts-ci \
-        migrate sim-provision sim test-integration pricing backtest trading trade-demo
+        migrate sim-provision sim test-integration pricing backtest trading trade-demo ws-fanout-demo ws-load
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -87,6 +87,11 @@ trading: ## Run matcher/relayer/listener/sweeper as their own process (set TRADI
 	cd services/api && uv run python -m app.trading.run
 trade-demo: ## DEMO: two wallets place crossing orders against the running stack and settle on Anvil
 	cd services/api && uv run python -m dev.trade_demo
+ws-fanout-demo: ## DEMO: start a 2nd API replica, drive a trade through it, show both /ws clients see identical seqs
+	docker compose --profile replica up -d --build --wait api api2
+	cd services/api && uv run python -m dev.ws_fanout_demo
+ws-load: ## Load test /ws: N clients on one market, p95 delivery latency (make ws-load ARGS="--clients 500")
+	cd services/api && uv run python -m loadtest.ws_load $(ARGS)
 backtest: ## Replay the engine over history: make backtest ARGS="--lat 13.08 --lon 80.27 --from 2026-06-01 --to 2026-06-07"
 	cd services/api && uv run python -m app.pricing.backtest $(ARGS)
 

@@ -49,6 +49,13 @@ services:
       API_ENV: ${API_ENV:-development}
       API_LOG_LEVEL: ${API_LOG_LEVEL:-INFO}
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:3000}
+      WS_EXTRA_ORIGINS: ${WS_EXTRA_ORIGINS:-}
+      WS_MAX_SUBSCRIPTIONS: ${WS_MAX_SUBSCRIPTIONS:-20}
+      WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-4096}
+      WS_MAX_CONN_PER_IP: ${WS_MAX_CONN_PER_IP:-20}
+      WS_MAX_CONN_PER_ADDRESS: ${WS_MAX_CONN_PER_ADDRESS:-10}
+      WS_SEND_QUEUE: ${WS_SEND_QUEUE:-256}
+      WS_PING_SECONDS: ${WS_PING_SECONDS:-20}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wattswap}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wattswap}
       REDIS_URL: redis://redis:6379/0
       RPC_URL: http://anvil:8545
@@ -100,6 +107,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # A second, gateway-only replica: proves /ws fan-out across API instances through Redis.
+  # Opt-in: `docker compose --profile replica up -d api2` (or `make ws-fanout-demo`). It runs no
+  # background workers and no migrations (those stay on `api`), so it is safe next to it.
+  api2:
+    profiles: ["replica"]
+    extends:
+      service: api
+    command: ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--ws", "websockets-sansio"]
+    environment:
+      PRICING_EMBEDDED: "false"
+      TRADING_EMBEDDED: "false"
+      MINT_WORKER_ENABLED: "false"
+    ports: !override
+      - "${API2_PORT:-8001}:8000"
+    depends_on: !override
+      api: { condition: service_healthy }
 
   # The pricing engine as its own process. Opt-in: set PRICING_EMBEDDED=false in .env so the API does
   # not also run one, then `docker compose --profile pricing up -d pricing`. A leader lock makes it safe

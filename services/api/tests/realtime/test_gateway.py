@@ -167,7 +167,9 @@ async def test_send_timeout_closes_4409(make_settings: SettingsFactory) -> None:
                 await asyncio.sleep(3600)
 
             victim.ws.send_text = stalled
-            await pub(h, PRICE, i=1)
+            await pub(h, PRICE, i=1)  # the writer enters the stalled send
+            await asyncio.sleep(0.5)  # longer than ws_send_timeout_seconds
+            await pub(h, PRICE, i=2)  # the next enqueue notices the stall
             assert await c.expect_close(5) == 4409
 
 
