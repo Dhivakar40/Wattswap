@@ -103,6 +103,19 @@ describe("order stream reducer and totals", () => {
     expect(same).toBe(book); // fills change totals, not the order map
   });
 
+  it("ignores mint frames in the order map", () => {
+    const book = { "0xa": order("0xa") };
+    const frame = {
+      type: "mint",
+      channel: "c",
+      epoch: E,
+      seq: 1,
+      ts: 1,
+      data: { status: "confirmed" },
+    };
+    expect(applyUserFrame(book, frame as never)).toBe(book);
+  });
+
   it("is idempotent: the same order delta twice gives the same book", () => {
     const f = { type: "order", channel: "c", epoch: E, seq: 1, ts: 1, data: order("0xa") } as never;
     expect(applyUserFrame(applyUserFrame({}, f), f)).toEqual(applyUserFrame({}, f));
@@ -207,6 +220,23 @@ describe("live refresh on user:{address} (no polling)", () => {
     expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["me", ADDR] });
     expect(refetchBalances).toHaveBeenCalledTimes(1);
     expect(Object.keys(hook.result.current.state ?? {})).toEqual(["0xa"]); // 0xb opened then filled
+  });
+
+  it("a mint on user:{address} refreshes produced and balances, leaving the order book alone", async () => {
+    const refetchBalances = vi.fn();
+    const hook = await connect(refetchBalances);
+    const mint = { status: "confirmed", meter_id: "0xmeter", reading_id: "0xr", simulated: true };
+    await act(async () => {
+      socket.push({ ...frame(11, "order", mint), type: "mint" });
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(LIVE_REFRESH_MS * 2);
+    });
+    expect(qc.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["me", ADDR] }); // portfolio totals incl. produced
+    expect(refetchBalances).toHaveBeenCalledTimes(1); // the WATT balance changed on-chain
+    expect(Object.keys(hook.result.current.state ?? {})).toEqual(["0xa"]);
   });
 
   it("does not poll: silence means no refresh, however long", async () => {
