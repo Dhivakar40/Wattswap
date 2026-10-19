@@ -2,3 +2,7 @@
 node_modules
 pnpm-lock.yaml
 next-env.d.ts
+.next*/
+test-results/
+playwright-report/
+src/lib/api/schema.d.ts
