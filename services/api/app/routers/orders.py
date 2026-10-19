@@ -17,6 +17,8 @@ from app.core.state import ChainDep, RedisDep, SettingsDep
 from app.matching import events, service
 from app.matching.events import Outbox
 from app.models import Market, Order, OrderStatus, Settlement, Trade
+from app.realtime import streams
+from app.realtime.snapshot import SEQ_HEADER
 from app.schemas.trading import (
     BookOut,
     CancelOut,
@@ -115,11 +117,17 @@ async def place_order(
 async def my_orders(
     user: UserDep,
     session: SessionDep,
+    redis: RedisDep,
+    response: Response,
     status: Annotated[OrderStatus | None, Query()] = None,
     market: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before_seq: Annotated[int | None, Query(ge=0)] = None,
 ) -> list[OrderOut]:
+    # Head seq FIRST, then the data: every later change is then a delta with seq > this value.
+    response.headers[SEQ_HEADER] = str(
+        await streams.head_seq(redis, events.user_channel(user.address))
+    )
     q = select(Order).where(Order.maker == user.address.lower())
     if status is not None:
         q = q.where(Order.status == status)
@@ -167,24 +175,33 @@ async def book(
     """Aggregated price levels (no maker addresses)."""
     m = await _market(session, market_id)
     now = int(time.time())
+    head = await streams.head_seq(redis, events.book_channel(m.market_id))  # before the data
     if depth == events.BOOK_DEPTH:
         cached = await redis.get(events.book_key(m.market_id))
         if cached:
             data = BookOut.model_validate(json.loads(cached))
-            if now - data.ts < 5:
+            # Only a cache written for the current head is consistent with the channel's seq.
+            if now - data.ts < 5 and data.seq == head:
                 return data
-    return await events.book_levels(session, m.market_id, now, depth)
+    snapshot = await events.book_levels(session, m.market_id, now, depth)
+    snapshot.seq = head
+    return snapshot
 
 
 @router.get("/markets/{market_id}/trades", response_model=list[TradeOut])
 async def tape(
     market_id: str,
     session: SessionDep,
+    redis: RedisDep,
+    response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before: Annotated[int | None, Query(ge=0, description="unix ts cursor")] = None,
 ) -> list[TradeOut]:
     """Confirmed trades only."""
     m = await _market(session, market_id)
+    response.headers[SEQ_HEADER] = str(
+        await streams.head_seq(redis, events.trades_channel(m.market_id))
+    )
     q = select(Trade).where(Trade.market_id == m.market_id, Trade.executed_at.is_not(None))
     if before is not None:
         q = q.where(Trade.executed_at < datetime.fromtimestamp(before, UTC))
@@ -200,10 +217,13 @@ async def tape(
 async def my_trades(
     user: UserDep,
     session: SessionDep,
+    redis: RedisDep,
+    response: Response,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> list[TradeOut]:
     """The caller's trades in every state, with the settlement status and failure reason."""
     me = user.address.lower()
+    response.headers[SEQ_HEADER] = str(await streams.head_seq(redis, events.user_channel(me)))
     rows = await session.scalars(
         select(Trade)
         .where(or_(Trade.buyer == me, Trade.seller == me))

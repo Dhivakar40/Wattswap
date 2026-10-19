@@ -44,6 +44,7 @@ from app.pricing.params import PricingParams
 from app.pricing.quotes import PriceQuote, SignedQuote, sign_quote
 from app.pricing.repo import MarketCell
 from app.pricing.weather import Lookup, WeatherService
+from app.realtime import publisher
 
 log = logging.getLogger("wattswap.pricing")
 
@@ -345,6 +346,7 @@ class PricingService:
             "hours": hours,
         }
         await self.redis.set(publish.forecast_key(market.market_id), json.dumps(body))
+        await publisher.publish(self.redis, f"forecast:{market.market_id}", "forecast", body)
 
     def _observe(self, market: Market, tick: Tick, clock_mode: str, seq: int) -> None:
         name = market.name

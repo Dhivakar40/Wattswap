@@ -97,6 +97,7 @@ class BookOut(BaseModel):
     bids: list[BookLevel]
     asks: list[BookLevel]
     ts: int
+    seq: int | None = None  # `orderbook:{market}` seq this snapshot is consistent with
 
 
 class OrderConfigOut(BaseModel):

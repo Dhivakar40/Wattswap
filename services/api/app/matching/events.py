@@ -1,12 +1,13 @@
-"""Redis publishing for the book, trades and per-user streams (consumed by the Phase 5 gateway).
+"""Redis publishing for the book, trades and per-user channels (consumed by the /ws gateway).
 
-Envelope (same as the price channel): {type, channel, seq, ts, data}. `seq` is a per-channel Redis
-counter so a client can detect gaps and re-snapshot over REST. Events are collected in an `Outbox`
-during a DB transaction and flushed only AFTER it commits, so a rolled-back change is never
-announced.
+Envelope (same as the price channel): {type, channel, seq, ts, data}. `seq` is allocated atomically
+with the publish (see `app.realtime.publisher`), so a client can detect gaps and re-snapshot or
+resume. Events are collected in an `Outbox` during a DB transaction and flushed only AFTER it
+commits, so a rolled-back change is never announced.
 """
 
 import json
+import secrets
 import time
 from typing import Any
 
@@ -15,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import Order, OrderSide, OrderStatus
+from app.realtime import publisher
 from app.schemas.trading import BookLevel, BookOut, OrderOut, TradeOut
 
 BOOK_DEPTH = 20
@@ -37,10 +39,45 @@ def book_key(market_id: str) -> str:
     return f"book:{market_id}"
 
 
-async def publish(redis: aioredis.Redis, channel: str, type_: str, data: dict[str, Any]) -> None:
-    seq = int(await redis.incr(f"{channel}:seq"))
-    envelope = {"type": type_, "channel": channel, "seq": seq, "ts": int(time.time()), "data": data}
-    await redis.publish(channel, json.dumps(envelope, separators=(",", ":")))
+async def publish(
+    redis: aioredis.Redis, channel: str, type_: str, data: dict[str, Any]
+) -> publisher.Published:
+    return await publisher.publish(redis, channel, type_, data)
+
+
+_RELEASE = (
+    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0"
+)
+
+
+async def publish_book(
+    redis: aioredis.Redis, sessionmaker: async_sessionmaker[AsyncSession], market_id: str
+) -> None:
+    """Recompute and publish the book, never letting an older book carry a newer seq.
+
+    Compute + publish run under a per-market lock. A caller that cannot get the lock leaves a
+    `dirty` mark and returns; the holder re-reads the book until no mark is left, and re-checks
+    once more after releasing, so no committed change is ever left unpublished."""
+    dirty = f"book:dirty:{market_id}"
+    lock = f"book:lock:{market_id}"
+    await redis.set(dirty, "1", ex=30)
+    while await redis.exists(dirty):
+        token = secrets.token_hex(8)
+        if not await redis.set(lock, token, nx=True, px=10_000):
+            return  # the holder will see the mark
+        try:
+            while await redis.getdel(dirty):
+                now = int(time.time())
+                async with sessionmaker() as s:
+                    book = await book_levels(s, market_id, now)
+                body = book.model_dump(mode="json")
+                published = await publish(redis, book_channel(market_id), "orderbook", body)
+                body["seq"] = published.seq
+                await redis.set(
+                    book_key(market_id), json.dumps(body, separators=(",", ":")), ex=3600
+                )
+        finally:
+            await redis.eval(_RELEASE, 1, lock, token)
 
 
 async def book_levels(
@@ -106,17 +143,12 @@ class Outbox:
     async def flush(
         self, redis: aioredis.Redis, sessionmaker: async_sessionmaker[AsyncSession]
     ) -> None:
-        now = int(time.time())
         for address, type_, data in self._user:
             await publish(redis, user_channel(address), type_, data)
         for market_id, data in self._trades:
             await publish(redis, trades_channel(market_id), "trade", data)
         for market_id in self._markets:
-            async with sessionmaker() as s:
-                book = await book_levels(s, market_id, now)
-            body = book.model_dump(mode="json")
-            await redis.set(book_key(market_id), json.dumps(body, separators=(",", ":")), ex=3600)
-            await publish(redis, book_channel(market_id), "orderbook", body)
+            await publish_book(redis, sessionmaker, market_id)
         self._user.clear()
         self._trades.clear()
         self._markets.clear()
