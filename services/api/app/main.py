@@ -19,8 +19,12 @@ from app.core.db import make_engine, make_sessionmaker
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging, request_id_ctx
 from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
+from app.core.redis import make_redis
 from app.core.state import ChainServices
 from app.pricing.factory import PricingBundle, build_pricing
+from app.realtime import channels as rt_channels
+from app.realtime.gateway import Gateway
+from app.realtime.snapshot import EPOCH_HEADER, SEQ_HEADER
 from app.routers import (
     admin_pricing,
     admin_trading,
@@ -30,6 +34,7 @@ from app.routers import (
     orders,
     readings,
     system,
+    ws,
 )
 from app.workers.mint_worker import MintWorker
 from app.workers.trading import TradingBundle, build_trading, validate
@@ -68,7 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = make_engine(settings.database_url)
-        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        redis = make_redis(settings)
         app.state.settings = settings
         app.state.engine = engine
         app.state.sessionmaker = make_sessionmaker(engine)
@@ -76,6 +81,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.role_addresses = settings.role_key_addresses()
         chain = await _build_chain(settings, redis)
         app.state.chain = chain
+        rt_channels.configure_retention(rt_channels.retention_from_settings(settings))
+        gateway = Gateway(settings, redis, app.state.sessionmaker)
+        await gateway.start()
+        app.state.gateway = gateway
 
         stop = asyncio.Event()
         worker_task: asyncio.Task[None] | None = None
@@ -129,6 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             stop.set()
+            await gateway.stop()
             for task in (worker_task, pricing_task, trading_task):
                 if task is not None:
                     with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -148,7 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["content-type", "x-request-id"],
-        expose_headers=["x-request-id", "retry-after"],
+        expose_headers=["x-request-id", "retry-after", SEQ_HEADER, EPOCH_HEADER],
     )
 
     @app.middleware("http")
@@ -183,5 +193,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_v1.include_router(admin_trading.router)
     api_v1.include_router(system.config_router)
     app.include_router(system.system_router)
+    app.include_router(ws.router)
     app.include_router(api_v1)
     return app

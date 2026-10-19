@@ -138,7 +138,7 @@ async def test_events_are_published_after_commit_in_the_shared_envelope(
         await ps.aclose()
         assert {"orderbook", "trade", "order", "fill"} <= {e["type"] for e in seen}
         for e in seen:
-            assert set(e) == {"type", "channel", "seq", "ts", "data"}
+            assert set(e) == {"type", "channel", "epoch", "seq", "ts", "data"}
         trade = next(e for e in seen if e["type"] == "trade")
         assert trade["channel"] == f"trades:{MID}" and trade["data"]["status"] == "confirmed"
         # per-channel sequence numbers rise without gaps (clients detect holes with them)

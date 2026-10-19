@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from eth_account import Account
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEV_JWT_SECRET = "dev-only-insecure-jwt-secret-change-me-0123456789"  # noqa: S105
@@ -32,13 +32,18 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    api_env: Literal["development", "test", "production"] = "development"
+    # Secure by default: an unset API_ENV is "production" everywhere it is read (strict secrets,
+    # fail-fast chain checks, no missing-Origin /ws clients). Local dev sets API_ENV=development
+    # explicitly (.env.example, docker-compose); the test suite sets "test".
+    api_env: Literal["development", "test", "production"] = "production"
     api_log_level: str = "INFO"
     api_cors_origins: str = "http://localhost:3000"
     database_url: str = (
         "postgresql+asyncpg://wattswap:wattswap_dev_password@localhost:5432/wattswap"
     )
     redis_url: str = "redis://localhost:6379/0"
+    redis_max_connections: int = Field(default=200, ge=10)  # pool waits when all are busy
+    redis_pool_wait_seconds: float = Field(default=10.0, gt=0)
     rpc_url: str = "http://localhost:8545"
     chain_id: int = Field(default=31337, ge=1)
 
@@ -48,6 +53,10 @@ class Settings(BaseSettings):
     session_cookie_name: str = "wattswap_session"
     # Cookies are always Secure. Browsers treat http://localhost as a secure context.
     session_cookie_secure: bool = True
+    # Host-only (None) is right when the app and API share a registrable domain: SameSite=Lax
+    # cookies flow between app.example.com and api.example.com because they are the same SITE.
+    # Set e.g. ".example.com" only if another subdomain must also receive the cookie.
+    session_cookie_domain: str | None = None
     siwe_domain: str = "localhost:3000"
     siwe_nonce_ttl_seconds: int = Field(default=300, ge=30)
     admin_addresses: str = ""
@@ -140,6 +149,48 @@ class Settings(BaseSettings):
     rate_limit_user: int = Field(default=120, ge=1)
     rate_limit_meter_ingest: int = Field(default=60, ge=1)
 
+    # --- WebSocket gateway (Phase 5) ------------------------------------------------------
+    # Origins allowed to open /ws besides API_CORS_ORIGINS (comma-separated).
+    ws_extra_origins: str = ""
+    ws_max_subscriptions: int = Field(default=20, ge=1)
+    ws_max_message_bytes: int = Field(default=4096, ge=64)
+    ws_rate_per_window: int = Field(default=20, ge=1)  # sustained inbound messages per window
+    ws_rate_window_seconds: float = Field(default=10.0, gt=0)
+    ws_rate_burst: int = Field(default=40, ge=1)
+    ws_rate_strikes: int = Field(default=3, ge=1)  # rate-limit errors before 4429
+    ws_max_conn_per_ip: int = Field(default=20, ge=1)
+    ws_max_conn_per_address: int = Field(default=10, ge=1)
+    ws_send_queue: int = Field(default=256, ge=2)
+    ws_send_timeout_seconds: float = Field(default=10.0, gt=0)
+    ws_ping_seconds: float = Field(default=20.0, gt=0)  # server ping; closed after 2 missed
+    ws_denylist_poll_seconds: float = Field(default=30.0, gt=0)
+    ws_resume_max_messages: int = Field(default=1000, ge=1)
+    # Dev-only synthetic `loadtest:{name}` channels for `make ws-load`; refused in production.
+    ws_loadtest_enabled: bool = False
+    # Retained stream windows (resume): count and age per channel class.
+    ws_retain_public_len: int = Field(default=5000, ge=10)
+    ws_retain_public_age_seconds: int = Field(default=600, ge=10)
+    ws_retain_user_len: int = Field(default=1000, ge=10)
+    ws_retain_user_age_seconds: int = Field(default=1800, ge=10)
+    ws_retain_price_len: int = Field(default=500, ge=10)
+    ws_retain_price_age_seconds: int = Field(default=3600, ge=10)
+
+    @field_validator("session_cookie_domain")
+    @classmethod
+    def _empty_cookie_domain_is_host_only(cls, value: str | None) -> str | None:
+        return value or None  # `SESSION_COOKIE_DOMAIN=` in .env means "not set"
+
+    @property
+    def ws_origins(self) -> frozenset[str]:
+        extra = [o.strip() for o in self.ws_extra_origins.split(",") if o.strip()]
+        return frozenset(o.rstrip("/").lower() for o in [*self.cors_origins, *extra])
+
+    @property
+    def ws_allow_missing_origin(self) -> bool:
+        """A /ws handshake without an Origin header (a non-browser client) is accepted only in
+        development. An unset API_ENV is production, so it is refused."""
+        return self.api_env == "development"
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]
@@ -173,6 +224,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_safety(self) -> "Settings":
+        if self.api_env == "production" and self.ws_loadtest_enabled:
+            raise ConfigError("WS_LOADTEST_ENABLED must not be set in production")
         if self.api_env == "production":
             secret = self.jwt_secret.get_secret_value()
             if secret == DEV_JWT_SECRET or len(secret) < 32:

@@ -1,18 +1,19 @@
 """Publish ticks to Redis: pub/sub for live consumers, keys for snapshots.
 
-Channel `price:{marketId}` carries the envelope the Phase 5 WebSocket gateway forwards
-unchanged: {type, channel, seq, ts, data}. `seq` is a per-market counter so a client can
-detect gaps and re-snapshot over REST.
+Channel `price:{marketId}` carries the envelope the WebSocket gateway forwards unchanged:
+{type, channel, seq, ts, data}. `seq` is allocated atomically with the publish
+(`app.realtime.publisher`) so a client can detect gaps and re-snapshot or resume.
 """
 
 import json
-from dataclasses import dataclass
 from typing import Any
 
 import redis.asyncio as aioredis
 
 from app.pricing.engine import Tick
 from app.pricing.quotes import SignedQuote
+from app.realtime import channels as rt_channels
+from app.realtime import publisher
 
 
 def channel(market_id: str) -> str:
@@ -20,7 +21,7 @@ def channel(market_id: str) -> str:
 
 
 def latest_key(market_id: str) -> str:
-    return f"price:{market_id}:latest"
+    return rt_channels.latest_key(channel(market_id))
 
 
 def quote_key(market_id: str) -> str:
@@ -66,10 +67,7 @@ def tick_payload(
     }
 
 
-@dataclass(frozen=True)
-class Published:
-    seq: int
-    receivers: int
+Published = publisher.Published
 
 
 async def publish_tick(
@@ -79,20 +77,10 @@ async def publish_tick(
     quote: SignedQuote | None,
     clock_mode: str,
 ) -> Published:
-    seq = int(await redis.incr(f"{channel(market_id)}:seq"))
     data = tick_payload(tick, market_id, quote, clock_mode)
-    envelope = {
-        "type": "price",
-        "channel": channel(market_id),
-        "seq": seq,
-        "ts": tick.ts,
-        "data": data,
-    }
-    body = json.dumps(envelope, separators=(",", ":"))
-    async with redis.pipeline(transaction=False) as pipe:
-        pipe.set(latest_key(market_id), body)
-        if quote is not None:
-            pipe.set(quote_key(market_id), json.dumps(quote.to_json(), separators=(",", ":")))
-        pipe.publish(channel(market_id), body)
-        results = await pipe.execute()
-    return Published(seq, int(results[-1]))
+    published = await publisher.publish(
+        redis, channel(market_id), "price", data, ts=tick.ts, keep_latest=True
+    )
+    if quote is not None:
+        await redis.set(quote_key(market_id), json.dumps(quote.to_json(), separators=(",", ":")))
+    return published

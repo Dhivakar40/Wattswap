@@ -1,4 +1,4 @@
-# API reference (Phases 2–4)
+# API reference (Phases 2–5)
 
 Base path `/api/v1`. Interactive docs and the OpenAPI schema: `GET /docs`, `GET /openapi.json`.
 Operational endpoints sit at the root: `GET /health` (liveness), `GET /ready` (Postgres, Redis, RPC and the
@@ -172,9 +172,266 @@ on-chain"), `cancel_reason` (`user`, `unfunded:balance`, `unfunded:allowance`, `
 | `GET /admin/trading/state` | Which roles have a leader, matching paused?, relayer halt reason, settlement counts by status, open orders, pairs on cooldown, listener cursor/head/lag. |
 | `POST /admin/trading/pause`, `/resume` | Stop/restart matching and new submissions (in-flight transactions are still tracked). |
 
-## Redis feed (consumed by the Phase 5 gateway)
+## Redis feed (forwarded by the `/ws` gateway, see "WebSocket (Phase 5)")
 
 Same envelope as `price:{marketId}`: `{type, channel, seq, ts, data}` with a per-channel `seq`.
 `orderbook:{marketId}` (`type: "orderbook"`, aggregated levels), `trades:{marketId}` (`type: "trade"`, confirmed
 trades), `user:{address}` (`type: "order"` on every order change, `"fill"` on settlement state changes).
 Events are published only after the database transaction commits.
+
+# WebSocket (Phase 5)
+
+One endpoint, `GET /ws` (upgrade to WebSocket), streams everything that changes: prices and their drivers,
+the order book, the trade tape, a user's own orders and fills, and a meter owner's readings and mints.
+REST remains the source of truth; the socket delivers **deltas** and REST delivers **snapshots**
+(see [Staying consistent](#staying-consistent-snapshot--delta)).
+
+> Testnet demo. Meter messages come from the labeled simulator and carry `"simulated": true`.
+
+```bash
+# anonymous, public channels (dev only: a missing Origin is accepted when API_ENV=development)
+# NOTE: an unset API_ENV means production; local dev sets API_ENV=development explicitly.
+npx wscat -c ws://localhost:8000/ws
+> {"op":"subscribe","channels":["price:0x…marketId"],"id":"1"}
+# in a browser-like context pass the Origin and, for user:/meter: channels, the session cookie
+npx wscat -c ws://localhost:8000/ws -H "Origin: http://localhost:3000" -H "Cookie: wattswap_session=<jwt>"
+```
+
+## Handshake, Origin and authentication
+
+| Rule | Behaviour |
+|---|---|
+| **Origin allow-list** | The `Origin` header must exactly match `API_CORS_ORIGINS` or `WS_EXTRA_ORIGINS` (case-insensitive, trailing `/` ignored). Anything else is refused **before the upgrade** with `HTTP 403`. Cookies alone do not stop cross-site WebSocket hijacking (a browser attaches them to any site's socket), so this check is mandatory. |
+| **Missing Origin** | Non-browser clients (wscat, scripts) send none. It is accepted **only when `API_ENV=development`**. `API_ENV` defaults to `production`, so an unset value, `test` and `production` all refuse it with `403`. |
+| **Authentication** | The `wattswap_session` cookie from `POST /auth/login`, read at the handshake. No token in the URL or in a first message, so credentials never reach logs. No cookie, or an invalid/revoked one, means an anonymous socket: public channels only. |
+| **Authorization** | `user:{address}` only for the address in the JWT. `meter:{meterId}` only for the meter's owner. A failed subscribe is an `error` frame; the socket stays open and nothing from that channel is ever sent. |
+| **Session end** | Logout closes that session's sockets on **every replica** with `4401 session_revoked` (a `ws:control` Redis message, backed by a denylist re-check every `WS_DENYLIST_POLL_SECONDS` in case that message is lost). JWT expiry closes the socket at `exp` with `4401 session_expired`. |
+
+Production note: the browser sends the cookie to the API only if app and API are the same **site**; see
+`docs/adr/009-realtime-gateway.md` (shared registrable domain).
+
+## Channels
+
+`{market}` and `{meterId}` are lowercase `0x` + 64 hex; `{address}` is lowercase `0x` + 40 hex (any case is accepted
+in requests and normalised). Unknown markets are refused (`unknown_market`).
+
+| Channel | Access | Message `type`s | Published by | Retained for resume |
+|---|---|---|---|---|
+| `price:{market}` | public | `price` | pricing engine, every tick (15 s) | 500 msgs / 1 h |
+| `forecast:{market}` | public | `forecast` | pricing engine, when the 24 h outlook is recomputed (5–10 min) | 50 / 1 h |
+| `orderbook:{market}` | public | `orderbook` | after every order/trade change (full depth, no addresses) | 5 000 / 10 min |
+| `trades:{market}` | public | `trade` | when a settlement is confirmed | 5 000 / 10 min |
+| `user:{address}` | that address | `order`, `fill` | every change to the user's orders / trades | 1 000 / 30 min |
+| `meter:{meterId}` | the meter's owner | `reading`, `mint` | reading ingest; mint worker transitions | 1 000 / 30 min |
+| `loadtest:{name}` | public, **dev only** (`WS_LOADTEST_ENABLED=true`, refused when `API_ENV=production`) | any | `make ws-load` | 1 000 / 1 min |
+
+Retention windows are env-configurable (`WS_RETAIN_*`). A message is retained until it is older than the window **or**
+the count is exceeded, whichever comes first.
+
+## Frames
+
+### Server → client data frame (the envelope)
+
+```json
+{"type":"orderbook","channel":"orderbook:0x7f…","epoch":"9c1f03ab77d2e418","seq":412,"ts":1792401331,"data":{ … }}
+```
+
+| Field | Meaning |
+|---|---|
+| `type` | Message kind (see below). |
+| `channel` | The channel it belongs to. |
+| `epoch` | Random id of the channel's stream, created when its state is first created and **recreated if that state is lost** (a Redis reset). A `seq` is only comparable within one epoch. Remember it with `seq`. |
+| `seq` | Per-channel counter within the epoch, **+1 per message, no gaps**. Allocated atomically with the publish, so order on the wire equals `seq` order. |
+| `ts` | Unix seconds at publish. |
+| `data` | Type-specific body. Amounts and prices are decimal **strings** (Wh; mUSDC base units per kWh); never JS floats. |
+
+### Data bodies
+
+`orderbook` — full depth, state-replacing (a client replaces its book with this):
+```json
+{"market_id":"0x7f…","bids":[{"price":"160000","amount_wh":"2000","orders":1}],"asks":[{"price":"140000","amount_wh":"1000","orders":2}],"ts":1792401331}
+```
+
+`trade` — a confirmed settlement (public tape):
+```json
+{"id":"7d1c…","market_id":"0x7f…","buyer":"0x9965…","seller":"0x3C44…","fill_wh":"500","exec_price":"235179","cost":"117589","fee":"1175","status":"confirmed","failure_reason":null,"tx_hash":"0x6088…","block_number":39743,"executed_at":"2026-10-19T09:20:30Z","created_at":"2026-10-19T09:20:28Z","external":false}
+```
+
+`order` — your order changed (same body as `GET /orders/{hash}`, keyed by `order_hash`); `fill` — one of your trades changed state (same body as `trade`, keyed by `id`; `status` goes `matched → submitted → confirmed | failed`).
+
+`price` — body of `GET /markets/{id}/price`, including the **price drivers** the Market Insights page renders (numbers below are illustrative):
+```json
+{"marketId":"0x7f…","price":235179,"rawPrice":235179,"emaPrice":"235179.000","supplyW":2829,"demandW":4500,
+ "bandBps":500,"breaker":"NORMAL","breakerReason":null,"weatherStale":false,"halted":false,"volBps":"1.2000",
+ "ts":1792401331,"marketTime":1792401331,"clockMode":"real","accelerated":false,"quote":{…signed PriceQuote…},
+ "events":[],
+ "drivers":{"version":2,"local_solar_hour":"14.250","profile_multiplier":"1.1000",
+   "supply":{"generation_kw":"2.828800","inventory_kw":"0","supply_kw":"…","effective_kw":"…","floor_applied":false,…},
+   "demand":{"load_kw":"4.950000","bids_kw":"…","velocity_kw":"…","demand_kw":"…",…},
+   "price":{"ratio":"1.7500","epsilon":"0.8","p_base":150000,"raw":235179,…},
+   "smoothing":{"ema":"…","alpha":"0.3","applied":235179,"limiter":null,…},
+   "weather":[{"source":"live","age_s":0,…}],"breaker":{…},"band":{…},"attribution":{…},"terms":{…}}}
+```
+`drivers.*` is exactly what the engine used for that tick (`docs/pricing-model.md` explains every term), so the UI
+explains a price move from the same message that moved it.
+
+`forecast` — hourly outlook for the next 24 h: `{"marketId","generatedAt","marketTime","note","hours":[{"time","ghi_wm2","generation_kw","supply_kw","demand_kw","raw_price","clamps"}]}` (body of `GET /markets/{id}/forecast`).
+
+`reading` (meter owner) — an accepted reading: the `ReadingOut` body plus `"simulated": true`.
+`mint` (meter owner) — `{"status":"submitted|confirmed|failed","tx_hash","block_number","attempts","failure_reason","confirmed_at","reading_id","meter_id","simulated"}`.
+
+### Server → client control frames (no `seq`)
+
+| `type` | Body | When |
+|---|---|---|
+| `subscribed` | `ref`, `channels:[{channel, epoch, seq, replayed}]` | After a subscribe. `epoch`/`seq` = the channel's epoch and head when the subscription went live; the live stream continues at `seq + 1`. `replayed` = messages replayed just before this frame (resume). |
+| `unsubscribed` | `ref`, `channels:[…]` | After an unsubscribe. |
+| `resync` | `channel`, `reason`, `epoch`, `seq` | The client cannot be brought up to date from the log: re-fetch the REST snapshot. `reason`: `epoch_changed` (the channel's state was lost and recreated; also sent on a **live** socket right before the first message of the new epoch, whose seqs restart), `too_old` (outside the retention window), `ahead_of_head` (client seq > head of the same epoch), `too_many` (more than `WS_RESUME_MAX_MESSAGES` missed). `epoch`/`seq` are the channel's current epoch and head. |
+| `error` | `code`, `message`, `ref?`, `channel?` | A request failed; the socket stays open. Codes: `bad_channel`, `unknown_market`, `unauthorized`, `forbidden`, `too_many_subscriptions`, `rate_limited`, `bad_message`. |
+| `ping` | `ts` | Every `WS_PING_SECONDS` (20 s). Reply `{"op":"pong"}` (any inbound frame also counts as liveness). |
+| `pong` | `ref?` | Reply to a client `ping`. |
+
+### Client → server ops
+
+All frames are JSON text, ≤ `WS_MAX_MESSAGE_BYTES` (4 KiB), strictly validated (unknown fields are rejected).
+
+```json
+{"op":"subscribe","channels":["orderbook:0x7f…","user:0x9965…"],"id":"1","resume":{"orderbook:0x7f…":{"epoch":"9c1f03ab77d2e418","seq":412}}}
+{"op":"unsubscribe","channels":["orderbook:0x7f…"],"id":"2"}
+{"op":"ping","id":"3"}
+{"op":"pong"}
+```
+`resume` maps a channel to the **epoch and last seq the client applied** (both are required). If the epoch still matches and the log
+covers the gap, the server replays everything after `seq`, in order, *before* the `subscribed` frame; otherwise it sends `resync`. Subscribing to an already-joined channel is idempotent.
+
+Example session (`→` client, `←` server):
+```
+→ {"op":"subscribe","channels":["orderbook:0x7f…"],"id":"1"}
+← {"type":"subscribed","ref":"1","channels":[{"channel":"orderbook:0x7f…","epoch":"9c1f03ab77d2e418","seq":411,"replayed":0}]}
+← {"type":"orderbook","channel":"orderbook:0x7f…","epoch":"9c1f03ab77d2e418","seq":412,"ts":1792401331,"data":{…}}
+← {"type":"ping","ts":1792401351}
+→ {"op":"pong"}
+```
+
+## Staying consistent: snapshot + delta
+
+REST snapshots tell you *what is true now and which `(epoch, seq)` that corresponds to*. The socket then sends everything after that seq.
+
+| Snapshot | Channel | How `epoch` and `seq` are returned |
+|---|---|---|
+| `GET /markets/{id}/book` | `orderbook:{market}` | body fields `epoch`, `seq` |
+| `GET /markets/{id}/trades` | `trades:{market}` | response headers `X-Channel-Epoch`, `X-Channel-Seq` |
+| `GET /orders`, `GET /trades` (yours) | `user:{you}` | response headers `X-Channel-Epoch`, `X-Channel-Seq` |
+| `GET /markets/{id}/price` | `price:{market}` | body fields `epoch`, `seq` |
+
+**`X-Channel-Seq` and `X-Channel-Epoch`** are listed in `Access-Control-Expose-Headers`, so a script on an allowed web origin can
+read them (`fetch(url,{credentials:"include"}).then(r => r.headers.get("x-channel-epoch"))`). Without that a browser hides
+them from cross-origin pages.
+
+**The server reads the channel's head `(epoch, seq)` *before* it reads the data.** Therefore every change after the snapshot has a
+`seq` greater than the one returned; a change committed in between may appear in both the snapshot and a delta.
+That is safe because **deltas are idempotent by construction** — `orderbook` replaces the whole book, `order`/`fill`
+upsert by `order_hash`/`id`, `trade` is keyed by `id`, `price`/`forecast` replace. This is a rule for every new message type.
+
+Client algorithm (per channel; reference implementation: `services/api/dev/ws_sync.py`, tested in
+`tests/realtime/test_sync_protocol.py`):
+
+1. Connect, `subscribe`. Receive `subscribed{epoch: E, seq: S0}`. **Buffer** all deltas.
+2. `GET` the REST snapshot → `(data, E', Ssnap)`.
+3. Install the snapshot; apply buffered deltas **of epoch E'** with `seq > Ssnap` in order, dropping `seq <= Ssnap` and any other epoch. The first applied must be `Ssnap + 1`; if the buffer starts later, or its newest message is from a different epoch than the snapshot, the snapshot was too old — fetch again.
+4. Live: **epoch differs → the channel was reset: stop applying, buffer, go to step 2** (never compare seqs across epochs: after a reset the new messages start at seq 1 and would look like duplicates). Same epoch: `seq == last+1` → apply; `seq <= last` → ignore (duplicate); `seq > last+1` → **gap**: stop applying, buffer, go to step 2.
+5. On `resync` for the channel: go to step 2.
+6. On reconnect: `subscribe` again with `resume:{channel:{epoch, seq: last}}`; if the server answers `resync`, go to step 2, otherwise the replay continues seamlessly (no snapshot needed).
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant G as Gateway (any replica)
+    participant R as Redis (stream + pub/sub)
+    participant A as REST API
+    C->>G: subscribe orderbook (resume: none)
+    G->>R: SUBSCRIBE channel, read head seq
+    G-->>C: subscribed {seq: 411}
+    R-->>G: seq 412, 413 (live)
+    G-->>C: 412, 413  (client buffers: snapshot not loaded yet)
+    C->>A: GET /book
+    A->>R: read head seq (412)  -- BEFORE reading the data
+    A-->>C: snapshot {seq: 412, bids, asks}
+    Note over C: drop buffered 412 (<= snapshot), apply 413
+    R-->>G: seq 414
+    G-->>C: 414 (live, last+1: apply)
+    R--xG: seq 415 lost in transit
+    R-->>G: seq 416
+    G-->>C: 416
+    Note over C: 416 != 414+1 => GAP: buffer, stop applying
+    C->>A: GET /book
+    A-->>C: snapshot {seq: 416}
+    Note over C: state = snapshot; deltas > 416 apply from here
+    C--xG: connection drops
+    C->>G: subscribe (resume: {orderbook: {epoch: E, seq: 418}})
+    G->>R: XRANGE seq > 418 up to head (421)
+    G-->>C: 419, 420, 421 (replayed in order)
+    G-->>C: subscribed {seq: 421, replayed: 3}
+    Note over C: no snapshot needed
+```
+
+**Epoch change (Redis reset).** If the channel's state is lost, its next publish creates a new epoch and restarts `seq` at 1.
+A connected client then receives `resync{reason:"epoch_changed"}` followed by messages whose `epoch` differs from the one it holds;
+a reconnecting client's `resume` is answered with the same `resync`. Either way the client re-snapshots; it never silently
+ignores the new messages. Covered by `test_redis_flush_mid_session_is_detected_and_the_client_resyncs`.
+
+Resume safety: the server subscribes to live delivery first, buffers live messages, replays `last+1 .. head` from the
+retained log, then flushes buffered live messages with `seq > head` — so there is neither a hole nor a duplicate.
+
+## Heartbeat, backpressure and limits
+
+* **Heartbeat** is application-level JSON (browsers cannot send or observe WebSocket control-frame pings). The server pings every `WS_PING_SECONDS`; if it receives no frame at all for 2 intervals it closes with `4408`.
+* **Backpressure**: each socket has a bounded send queue (`WS_SEND_QUEUE`, 256). If a client does not read fast enough the queue overflows — or one send stalls longer than `WS_SEND_TIMEOUT_SECONDS` — and *that socket only* is closed with `4409`; other clients are unaffected. The client reconnects and resumes.
+* **Shutdown**: graceful close `1001` so clients reconnect (and resume) against another replica.
+
+| Limit | Default (env) | On breach |
+|---|---|---|
+| Subscriptions per connection | 20 (`WS_MAX_SUBSCRIPTIONS`) | `error: too_many_subscriptions`, socket stays open |
+| Inbound frame size | 4096 B (`WS_MAX_MESSAGE_BYTES`) | close `4413` |
+| Inbound rate | 20 msgs / 10 s sustained, burst 40 (`WS_RATE_PER_WINDOW`, `WS_RATE_WINDOW_SECONDS`, `WS_RATE_BURST`) | `error: rate_limited`; after 3 breaches (`WS_RATE_STRIKES`) close `4429` |
+| Connections per IP / per address | 20 / 10 (`WS_MAX_CONN_PER_IP`, `WS_MAX_CONN_PER_ADDRESS`) | upgrade succeeds, then close `4429 too_many_connections` (counted in Redis, so the limit holds across replicas; slots expire if a replica dies) |
+| Resume replay | 1 000 msgs (`WS_RESUME_MAX_MESSAGES`) | `resync: too_many` |
+
+### Close codes
+
+| Code | Name | Meaning | Client should |
+|---|---|---|---|
+| HTTP 403 | (before upgrade) | Origin not allowed / missing Origin outside development | Fix configuration; do not retry |
+| 1000 | normal | Client closed | – |
+| 1001 | going away | Server shutting down | Reconnect with backoff, resume |
+| 4400 | bad message | Malformed JSON, binary frame, unknown op or field, invalid shape | Fix the client; do not retry blindly |
+| 4401 | session ended | JWT expired (`session_expired`) or logged out (`session_revoked`) | Sign in again, then reconnect |
+| 4408 | heartbeat timeout | Nothing received for 2 ping intervals | Reconnect, resume |
+| 4409 | slow consumer | Send queue overflow / stalled send | Reconnect, resume (and read faster) |
+| 4413 | message too large | Inbound frame over the limit | Fix the client |
+| 4429 | rate limited | Sustained message-rate breach or too many connections | Back off, then reconnect |
+
+Suggested reconnect policy: exponential backoff 0.5 s → 30 s with jitter; treat `4400`/`4413` as bugs, `4401` as "sign in".
+
+## Several API replicas
+
+Any number of API processes can serve `/ws`. Every message is published to Redis by whichever process produced it
+(matcher, listener, pricing engine, REST handlers) using one atomic script that allocates the `seq`, appends to the
+channel's stream and broadcasts. The envelope is serialized once there; each gateway parses it once per message to read
+`(epoch, seq)` and hands the **same string object** to every local client (`test_one_parse_and_one_shared_string_for_all_clients`). Each gateway keeps **one** Redis subscription per channel it has local clients
+for. A client may connect to any replica, and may resume on a different one than it left.
+Proof: `make ws-fanout-demo` (two replicas in docker compose; a trade driven through replica 2 reaches clients on both
+with identical `(channel, seq)` sequences) and `tests/realtime/test_replicas.py`.
+
+If a gateway loses its Redis pub/sub connection it reconnects, re-subscribes, and replays every local socket from its
+own last-sent seq (or sends `resync`).
+
+Redis keys are hash-tagged per channel (`{chan:<channel>}:seq|stream|latest|epoch`) so the publish script stays valid on Redis Cluster.
+
+## Metrics
+
+`wattswap_ws_connections`, `wattswap_ws_handshakes_total{result}`, `wattswap_ws_closes_total{code}`, `wattswap_ws_subscriptions`, `wattswap_ws_messages_out_total{kind}`, `wattswap_ws_send_queue_depth`, `wattswap_ws_resume_total{outcome}`.
+
+## Load test
+
+`WS_LOADTEST_ENABLED=true WS_MAX_CONN_PER_IP=2000 docker compose up -d api` then `make ws-load ARGS="--clients 500 --messages 200 --rate 10"` (dev stack only; it publishes to a dedicated `loadtest:run-<timestamp>` channel, never to a real market). Results and method: `docs/phases/phase-5.md`.

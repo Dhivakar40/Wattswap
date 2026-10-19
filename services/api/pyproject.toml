@@ -48,7 +48,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "app/pricing/params.py" = ["RUF009"]  # Decimal defaults are immutable
-"tests/**" = ["S101", "S105", "S311", "ANN401"]
+"loadtest/**" = ["S603", "S607"]  # fixed-argv `docker stats` call
+"tests/**" = ["S101", "S105", "S311", "ANN401", "ASYNC109"]
 
 [tool.mypy]
 strict = true

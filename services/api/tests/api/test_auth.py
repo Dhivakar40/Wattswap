@@ -43,6 +43,27 @@ async def _login_raw(h: Harness, message: str, signature: str) -> int:
     return r.status_code
 
 
+async def test_cookie_is_host_only_by_default_and_domain_scoped_when_configured(
+    make_settings: SettingsFactory,
+) -> None:
+    for domain, expect in ((None, False), (".example.com", True)):
+        async with Harness(make_settings(session_cookie_domain=domain)) as h:
+            message, sig = await _signed_message(h, KEY_ALICE)
+            r = await h.client.post(
+                "/api/v1/auth/login", json={"message": message, "signature": sig}
+            )
+            assert r.status_code == 200
+            cookie = r.headers["set-cookie"].lower()
+            assert ("domain=.example.com" in cookie) is expect
+            assert "samesite=lax" in cookie  # never relaxed to None
+            # the jar rejects a Domain that does not match the test host, so read the header
+            token = r.headers["set-cookie"].split(f"{COOKIE_NAME}=", 1)[1].split(";", 1)[0]
+            out = await h.client.post(
+                "/api/v1/auth/logout", headers={"cookie": f"{COOKIE_NAME}={token}"}
+            )
+            assert ("domain=.example.com" in out.headers["set-cookie"].lower()) is expect
+
+
 async def test_login_sets_httponly_secure_lax_cookie_with_12h_lifetime(harness: Harness) -> None:
     message, sig = await _signed_message(harness, KEY_ALICE)
     r = await harness.client.post("/api/v1/auth/login", json={"message": message, "signature": sig})

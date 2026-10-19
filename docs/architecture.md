@@ -87,3 +87,19 @@ meters (DB) --> capacity per cell        chain --> WATT held (inventory)        
 ```
 
 See [pricing-model.md](pricing-model.md) and [ADR-007](adr/007-pricing-engine.md).
+
+## Realtime flow (Phase 5)
+
+```
+ matcher / listener / pricing / REST ──► publisher.publish()  (one Lua script: INCR seq + XADD + PUBLISH)
+                                              │                      Redis: {chan:X}:seq  {chan:X}:stream  PUBLISH X
+              ┌───────────────────────────────┴───────────────────────────────┐
+        API replica 1  Hub (1 Redis SUBSCRIBE per channel with local clients)     API replica 2  Hub
+              │  per-socket bounded queue → writer                                      │
+        browser A (cookie, Origin checked)                                        browser B
+              ▲   REST snapshot (+ seq)  ◄──── GET /book, /trades, /orders ────►  same data, any replica
+```
+
+Clients keep state with *snapshot + deltas* and reconnect with `resume` (`docs/api.md`, "WebSocket"). Decisions and
+the same-site cookie requirement for production: [ADR-009](adr/009-realtime-gateway.md). `make ws-fanout-demo` runs the
+two-replica proof against docker compose.

@@ -10,12 +10,11 @@ import asyncio
 import logging
 import signal
 
-import redis.asyncio as aioredis
-
 from app.chain.client import ChainClient
 from app.core.config import get_settings
 from app.core.db import make_engine, make_sessionmaker
 from app.core.logging import configure_logging
+from app.core.redis import make_redis
 from app.workers.trading import build_trading, validate
 
 log = logging.getLogger("wattswap.trading.run")
@@ -28,7 +27,7 @@ async def main() -> int:
         log.error("TRADING_ENABLED is false; nothing to run")
         return 1
     engine = make_engine(settings.database_url)
-    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    redis = make_redis(settings)
     client = ChainClient(settings)
     bundle = build_trading(settings, make_sessionmaker(engine), redis, client)
     problems = await validate(settings, client, bundle.relayer.sender.address)

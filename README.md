@@ -136,6 +136,21 @@ Details: [docs/settlement.md](docs/settlement.md) (flow, cancels, minimum sizes)
 [ADR-008](docs/adr/008-trading-architecture.md), [threat model](docs/threat-model.md). Off-chain cancels are not
 binding on-chain; `cancel_type` tells the UI which kind happened.
 
+## Realtime (WebSocket)
+
+`ws://localhost:8000/ws` streams `price:`, `forecast:`, `orderbook:`, `trades:` (public) and `user:`, `meter:` (your
+session only) as `{type, channel, epoch, seq, ts, data}`. A gap in `seq` or a change of `epoch` means re-fetch the REST snapshot; a
+reconnecting client resumes from its last `(epoch, seq)`. The handshake requires an allowed `Origin`.
+
+```bash
+npx wscat -c ws://localhost:8000/ws          # works in dev only (API_ENV=development accepts a missing Origin; the default is production)
+> {"op":"subscribe","channels":["price:<marketId>"]}
+make ws-fanout-demo    # 2nd API replica + a trade driven through it: both /ws clients see identical seqs
+make ws-load           # 500 clients on a synthetic channel, p95 delivery latency (dev stack; needs WS_LOADTEST_ENABLED=true)
+```
+
+Protocol, close codes and limits: [docs/api.md](docs/api.md#websocket-phase-5) · [ADR-009](docs/adr/009-realtime-gateway.md).
+
 ## Environment variables
 
 Every variable is documented in [.env.example](.env.example). Copy it to `.env` (`make env`); never commit `.env`.

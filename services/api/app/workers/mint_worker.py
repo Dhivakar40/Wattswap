@@ -33,6 +33,8 @@ from app.chain.tx import FeeCeilingError, SignedTx, TxRevertedError, TxSender, i
 from app.core.config import Settings
 from app.core.metrics import MINTS, MINTS_PENDING
 from app.models import Meter, Mint, MintStatus, Reading
+from app.realtime import meter_events
+from app.services.readings import mint_out
 
 log = logging.getLogger("wattswap.mint_worker")
 
@@ -209,6 +211,20 @@ class MintWorker:
             bytes.fromhex(reading.signature[2:]),
         )
 
+    async def _announce(self, s: AsyncSession, mint: Mint) -> None:
+        """Tell the meter owner's sockets about a mint status change (after the commit)."""
+        row = (
+            await s.execute(
+                select(Reading.reading_id, Meter.meter_id, Meter.is_simulated)
+                .join(Meter, Meter.id == Reading.meter_pk)
+                .where(Reading.id == mint.reading_pk)
+            )
+        ).one_or_none()
+        if row is not None:
+            await meter_events.publish_mint(
+                self.redis, row[1], row[0], mint_out(mint), simulated=bool(row[2])
+            )
+
     async def _finish_confirmed(
         self, s: AsyncSession, mint: Mint, block_number: int | None, tx_hash: str | None
     ) -> None:
@@ -219,6 +235,7 @@ class MintWorker:
         mint.confirmed_at = datetime.now(UTC)
         await s.commit()
         MINTS.labels(status="confirmed").inc()
+        await self._announce(s, mint)
         log.info("mint confirmed", extra={"tx": mint.tx_hash, "block": block_number})
 
     async def _finish_failed(self, s: AsyncSession, mint: Mint, reason: str) -> None:
@@ -226,6 +243,7 @@ class MintWorker:
         mint.failure_reason = reason[:1000]
         await s.commit()
         MINTS.labels(status="failed").inc()
+        await self._announce(s, mint)
         log.warning("mint failed", extra={"reason": reason, "mint_id": str(mint.id)})
 
     async def _requeue(self, s: AsyncSession, mint: Mint) -> None:
@@ -275,6 +293,7 @@ class MintWorker:
                 mint.tx_nonce = signed.nonce
                 mint.attempts += 1
                 await s.commit()  # durable BEFORE the tx is broadcast
+                await self._announce(s, mint)
 
             try:
                 await self.sender.submit(fn, on_signed=persist)
@@ -329,6 +348,7 @@ class MintWorker:
                 return False  # mined, waiting for confirmations
             if int(rcpt["status"]) == 1:
                 await self._finish_confirmed(s, mint, block, mint.tx_hash)
+                return True  # (was missing: fell through and confirmed a second time)
             else:
                 info = await self.sender.revert_reason(mint.tx_hash)
                 if is_contract_rejection(info):

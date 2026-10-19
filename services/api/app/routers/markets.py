@@ -60,7 +60,7 @@ async def latest_price(market_id: str, session: SessionDep, redis: RedisDep) -> 
     raw = await redis.get(publish.latest_key(market.market_id))
     if raw:
         envelope: dict[str, Any] = json.loads(raw)
-        return {"seq": envelope["seq"], **envelope["data"]}
+        return {"seq": envelope["seq"], "epoch": envelope["epoch"], **envelope["data"]}
     row = await session.scalar(
         select(PriceTick)
         .where(PriceTick.market_id == market.market_id)
@@ -69,7 +69,7 @@ async def latest_price(market_id: str, session: SessionDep, redis: RedisDep) -> 
     )
     if row is None:
         raise AppError(404, "no_price_yet", "the pricing engine has not produced a tick yet")
-    return {"seq": None, **repo.tick_row_json(row), "quote": None}
+    return {"seq": None, "epoch": None, **repo.tick_row_json(row), "quote": None}
 
 
 @router.get("/{market_id}/ticks")
