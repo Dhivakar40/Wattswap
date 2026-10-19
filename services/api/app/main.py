@@ -19,6 +19,7 @@ from app.core.db import make_engine, make_sessionmaker
 from app.core.errors import install_error_handlers
 from app.core.logging import configure_logging, request_id_ctx
 from app.core.metrics import HTTP_LATENCY, HTTP_REQUESTS
+from app.core.redis import make_redis
 from app.core.state import ChainServices
 from app.pricing.factory import PricingBundle, build_pricing
 from app.realtime import channels as rt_channels
@@ -72,7 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         engine = make_engine(settings.database_url)
-        redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        redis = make_redis(settings)
         app.state.settings = settings
         app.state.engine = engine
         app.state.sessionmaker = make_sessionmaker(engine)

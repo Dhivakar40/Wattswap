@@ -42,6 +42,8 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://wattswap:wattswap_dev_password@localhost:5432/wattswap"
     )
     redis_url: str = "redis://localhost:6379/0"
+    redis_max_connections: int = Field(default=200, ge=10)  # pool waits when all are busy
+    redis_pool_wait_seconds: float = Field(default=10.0, gt=0)
     rpc_url: str = "http://localhost:8545"
     chain_id: int = Field(default=31337, ge=1)
 

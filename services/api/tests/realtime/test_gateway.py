@@ -207,3 +207,22 @@ async def test_loadtest_channel_is_refused_unless_enabled(make_settings: Setting
         async with lv.connect() as c:  # names are validated like every other channel
             await c.send(op="subscribe", channels=["loadtest:Bad Name!", "loadtest:" + "a" * 40])
             assert [(await c.recv_type("error"))["code"] for _ in range(2)] == ["bad_channel"] * 2
+
+
+async def test_a_burst_of_subscribes_queues_for_redis_connections_instead_of_failing(
+    make_settings: SettingsFactory,
+) -> None:
+    """Regression for CI: the default Redis pool (100, non-blocking) raised MaxConnectionsError when
+    many sockets subscribed at once. With a tiny pool and 80 concurrent subscribes, every one of
+    them must still succeed."""
+    settings = make_settings(redis_max_connections=10, ws_max_conn_per_ip=1000)
+    async with Harness(settings) as h:
+        await seed_market(h)
+        async with Live(h) as lv:
+
+            async def one() -> str:
+                async with lv.connect() as c:
+                    return str((await c.subscribe(PRICE))["type"])
+
+            results = await asyncio.gather(*(one() for _ in range(80)))
+            assert results == ["subscribed"] * 80

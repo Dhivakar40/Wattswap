@@ -10,12 +10,11 @@ import asyncio
 import logging
 import signal
 
-import redis.asyncio as aioredis
-
 from app.chain.client import ChainClient
 from app.core.config import ConfigError, get_settings
 from app.core.db import make_engine, make_sessionmaker
 from app.core.logging import configure_logging
+from app.core.redis import make_redis
 from app.pricing.factory import build_pricing
 
 log = logging.getLogger("wattswap.pricing.run")
@@ -28,7 +27,7 @@ async def main() -> int:
         log.error("PRICING_ENABLED is false; nothing to run")
         return 1
     engine = make_engine(settings.database_url)
-    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    redis = make_redis(settings)
     chain: ChainClient | None
     try:
         chain = ChainClient(settings)
