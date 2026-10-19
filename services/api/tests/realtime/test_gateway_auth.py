@@ -43,18 +43,16 @@ def test_origin_allowed_is_exact_match() -> None:
     assert origin_allowed(None, allowed, allow_missing=True)
 
 
-def test_missing_origin_only_when_api_env_is_explicitly_development(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_missing_origin_is_accepted_only_in_development(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("API_ENV", raising=False)
-    assert not Settings(_env_file=None).ws_allow_missing_origin  # unset => refuse
+    secret = "a-real-production-secret-0123456789abcdef"
     assert Settings(_env_file=None, api_env="development").ws_allow_missing_origin
     assert not Settings(_env_file=None, api_env="test").ws_allow_missing_origin
-    secret = "a-real-production-secret-0123456789abcdef"
-    prod = Settings(_env_file=None, api_env="production", jwt_secret=secret)
-    assert not prod.ws_allow_missing_origin
+    assert not Settings(
+        _env_file=None, api_env="production", jwt_secret=secret
+    ).ws_allow_missing_origin
     monkeypatch.setenv("API_ENV", "development")
-    assert Settings(_env_file=None).ws_allow_missing_origin  # from the environment counts
+    assert Settings(_env_file=None).ws_allow_missing_origin  # from the environment
     monkeypatch.setenv("API_ENV", "test")
     assert not Settings(_env_file=None).ws_allow_missing_origin
 
@@ -218,8 +216,8 @@ async def test_snapshot_seq_header_is_readable_cross_origin(live: Live) -> None:
             exposed = {
                 h.strip().lower() for h in r.headers["access-control-expose-headers"].split(",")
             }
-            assert "x-channel-seq" in exposed, path
-            assert r.headers["x-channel-seq"].isdigit()
+            assert {"x-channel-seq", "x-channel-epoch"} <= exposed, path
+            assert r.headers["x-channel-seq"].isdigit() and r.headers["x-channel-epoch"]
         trades = await client.get(f"/api/v1/markets/{MID}/trades")
         assert trades.headers["x-channel-seq"] == "1"
         # an unlisted origin gets no CORS grant, so a browser would not expose anything

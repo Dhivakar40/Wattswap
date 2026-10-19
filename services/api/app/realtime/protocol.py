@@ -29,13 +29,21 @@ class _Inbound(BaseModel):
     id: Annotated[str, Field(max_length=64)] | None = None
 
 
+class ResumePoint(BaseModel):
+    """Where the client is in a channel: the epoch it last saw and the last seq it applied."""
+
+    model_config = ConfigDict(extra="forbid")
+    epoch: Annotated[str, Field(min_length=1, max_length=64)]
+    seq: Annotated[int, Field(ge=0)]
+
+
 class Subscribe(_Inbound):
     op: Literal["subscribe"]
     channels: Annotated[
         list[Annotated[str, Field(max_length=100)]], Field(min_length=1, max_length=50)
     ]
-    # channel -> last seq the client applied; the server replays what it missed
-    resume: dict[Annotated[str, Field(max_length=100)], Annotated[int, Field(ge=0)]] | None = None
+    # channel -> (epoch, last seq applied); the server replays what was missed, or answers `resync`
+    resume: dict[Annotated[str, Field(max_length=100)], ResumePoint] | None = None
 
 
 class Unsubscribe(_Inbound):
@@ -59,6 +67,7 @@ INBOUND: TypeAdapter[Subscribe | Unsubscribe | Ping | Pong] = TypeAdapter(Inboun
 
 class SubscribedChannel(BaseModel):
     channel: str
+    epoch: str  # the channel's stream epoch; remember it and send it back on resume
     seq: int  # head seq when the subscription became live: the live stream continues at seq + 1
     replayed: int = 0  # messages replayed before this frame (resume only)
 
@@ -81,7 +90,8 @@ class Resync(BaseModel):
 
     type: Literal["resync"] = "resync"
     channel: str
-    reason: Literal["too_old", "ahead_of_head", "too_many", "overflow"]
+    reason: Literal["epoch_changed", "too_old", "ahead_of_head", "too_many"]
+    epoch: str  # the channel's CURRENT epoch
     seq: int  # head seq now
 
 

@@ -24,9 +24,11 @@ class Kind(StrEnum):
     TRADES = "trades"
     USER = "user"
     METER = "meter"
+    LOADTEST = "loadtest"  # dev-only synthetic channel for `make ws-load` (WS_LOADTEST_ENABLED)
 
 
 PUBLIC_KINDS = frozenset({Kind.PRICE, Kind.FORECAST, Kind.ORDERBOOK, Kind.TRADES})
+LOADTEST_NAME = re.compile(r"^[a-z0-9-]{1,32}$")
 
 _ARG_PATTERN = {
     Kind.PRICE: MARKET_ID,
@@ -35,6 +37,7 @@ _ARG_PATTERN = {
     Kind.TRADES: MARKET_ID,
     Kind.USER: ADDRESS,
     Kind.METER: METER_ID,
+    Kind.LOADTEST: LOADTEST_NAME,
 }
 
 
@@ -66,6 +69,7 @@ _RETENTION: dict[Kind, Retention] = {
     Kind.TRADES: Retention(5000, 600),
     Kind.USER: Retention(1000, 1800),
     Kind.METER: Retention(1000, 1800),
+    Kind.LOADTEST: Retention(1000, 60),
 }
 
 
@@ -108,6 +112,10 @@ def stream_key(name: str) -> str:
     return f"{tag(name)}:stream"
 
 
+def epoch_key(name: str) -> str:
+    return f"{tag(name)}:epoch"
+
+
 def latest_key(name: str) -> str:
     return f"{tag(name)}:latest"
 
@@ -123,4 +131,5 @@ def retention_from_settings(settings: "Settings") -> dict[Kind, Retention]:
         Kind.TRADES: public,
         Kind.USER: user,
         Kind.METER: user,
+        Kind.LOADTEST: Retention(1000, 60),
     }

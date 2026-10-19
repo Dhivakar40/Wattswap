@@ -23,7 +23,7 @@ from app.core.state import ChainServices
 from app.pricing.factory import PricingBundle, build_pricing
 from app.realtime import channels as rt_channels
 from app.realtime.gateway import Gateway
-from app.realtime.snapshot import SEQ_HEADER
+from app.realtime.snapshot import EPOCH_HEADER, SEQ_HEADER
 from app.routers import (
     admin_pricing,
     admin_trading,
@@ -157,7 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["content-type", "x-request-id"],
-        expose_headers=["x-request-id", "retry-after", SEQ_HEADER],
+        expose_headers=["x-request-id", "retry-after", SEQ_HEADER, EPOCH_HEADER],
     )
 
     @app.middleware("http")

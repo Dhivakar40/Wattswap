@@ -32,8 +32,9 @@ BUFFER_LIMIT = 5000
 
 @dataclass
 class ChannelState:
+    epoch: str = ""
     last_sent: int = 0
-    buffer: list[tuple[int, str]] | None = field(default_factory=list)  # None = live
+    buffer: list[tuple[str, int, str]] | None = field(default_factory=list)  # None = live
 
 
 class Connection:
@@ -111,7 +112,7 @@ class Connection:
     def send(self, frame: BaseModel) -> None:
         self.enqueue(protocol.dump(frame), type(frame).__name__.lower())
 
-    def deliver(self, channel: str, seq: int, raw: str) -> None:
+    def deliver(self, channel: str, epoch: str, seq: int, raw: str) -> None:
         """Called by the hub for every message on a channel this socket joined."""
         state = self.subs.get(channel)
         if state is None:
@@ -120,8 +121,21 @@ class Connection:
             if len(state.buffer) >= BUFFER_LIMIT:
                 self.close(Close.SLOW_CONSUMER, "sync_buffer_overflow")
                 return
-            state.buffer.append((seq, raw))
+            state.buffer.append((epoch, seq, raw))
             return
+        self._accept(channel, state, epoch, seq, raw)
+
+    def _accept(self, channel: str, state: ChannelState, epoch: str, seq: int, raw: str) -> None:
+        if epoch != state.epoch:
+            # The channel's state was lost and recreated (Redis reset): its seqs restarted, so
+            # "seq <= last" no longer means "duplicate". Tell the client, then carry on in the
+            # new epoch; the client re-snapshots and applies deltas newer than the snapshot.
+            state.epoch = epoch
+            state.last_sent = seq - 1
+            WS_RESUME.labels("epoch_changed").inc()
+            self.send(
+                protocol.Resync(channel=channel, reason="epoch_changed", epoch=epoch, seq=seq)
+            )
         if seq > state.last_sent:
             state.last_sent = seq
             self.enqueue(raw)
@@ -137,39 +151,48 @@ class Connection:
             await self.hub.detach(self, channel)
             raise
 
-    async def sync(self, channel: str, resume_from: int | None) -> tuple[int, int]:
+    async def sync(
+        self, channel: str, resume_from: tuple[str, int] | None
+    ) -> tuple[streams.Head, int]:
         """Replay what the client missed (or just learn the head). Returns (head, replayed).
 
-        A `resync` frame is queued when the log cannot cover the gap."""
+        `resume_from` is the client's (epoch, last seq). A `resync` frame is queued when the log
+        cannot cover the gap (epoch changed, window passed, too many, or ahead of the head)."""
         state = self.subs[channel]
         state.buffer = [] if state.buffer is None else state.buffer
         if resume_from is None:
-            head = await streams.head_seq(self.redis, channel)
-            state.last_sent = head
-            return head, 0
+            h = await streams.head(self.redis, channel)
+            state.epoch, state.last_sent = h.epoch, h.seq
+            return h, 0
+        epoch, last = resume_from
         replay = await streams.read_since(
-            self.redis, channel, resume_from, max_messages=self.settings.ws_resume_max_messages
+            self.redis, channel, epoch, last, max_messages=self.settings.ws_resume_max_messages
         )
+        h = replay.head
         if replay.resync is not None:
             WS_RESUME.labels("resync").inc()
-            self.send(protocol.Resync(channel=channel, reason=replay.resync.value, seq=replay.head))
+            self.send(
+                protocol.Resync(
+                    channel=channel, reason=replay.resync.value, epoch=h.epoch, seq=h.seq
+                )
+            )
         else:
             WS_RESUME.labels("replayed" if replay.messages else "current").inc()
             for _, raw in replay.messages:
                 self.enqueue(raw)
-        state.last_sent = replay.head
-        return replay.head, len(replay.messages)
+        state.epoch, state.last_sent = h.epoch, h.seq
+        return h, len(replay.messages)
 
     def release(self, channel: str) -> None:
         """Go live: flush buffered live messages newer than what was replayed, in seq order."""
         state = self.subs.get(channel)
         if state is None or state.buffer is None:
             return
-        pending, state.buffer = sorted(state.buffer), None
-        for seq, raw in pending:
-            if seq > state.last_sent:
-                state.last_sent = seq
-                self.enqueue(raw)
+        pending, state.buffer = sorted(state.buffer, key=lambda m: m[1]), None
+        for epoch, seq, raw in pending:
+            if epoch == state.epoch and seq <= state.last_sent:
+                continue  # already covered by the replay
+            self._accept(channel, state, epoch, seq, raw)
 
     def schedule_catch_up(self, channel: str) -> None:
         """After the hub lost its Redis connection: replay from our own last-sent seq."""
@@ -183,7 +206,7 @@ class Connection:
                 return
             current.buffer = []
             try:
-                await self.sync(channel, current.last_sent)
+                await self.sync(channel, (current.epoch, current.last_sent))
             finally:
                 self.release(channel)
 

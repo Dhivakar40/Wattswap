@@ -144,12 +144,13 @@ class Hub:
         if not group:
             return
         try:
-            seq = int(json.loads(raw)["seq"])
+            env = json.loads(raw)  # parsed ONCE per message, not per client
+            epoch, seq = str(env["epoch"]), int(env["seq"])
         except (ValueError, KeyError, TypeError):
             log.error("dropping malformed envelope on %s", channel)
             return
         for conn in tuple(group):
-            conn.deliver(channel, seq, raw)
+            conn.deliver(channel, epoch, seq, raw)  # every client gets the same `raw` str object
 
     def _control(self, raw: str) -> None:
         try:

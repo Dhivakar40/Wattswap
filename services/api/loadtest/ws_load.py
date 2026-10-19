@@ -1,10 +1,11 @@
-"""Load test for the /ws gateway: N concurrent clients on ONE market, delivery latency and loss.
+"""Load test for the /ws gateway: N concurrent clients on one channel, delivery latency and loss.
 
     make ws-load ARGS="--clients 500 --messages 200 --rate 10"
     make ws-load ARGS="--api http://localhost:8000,http://localhost:8001 --clients 500"   # 2 replicas
 
-DEV STACK ONLY: it publishes synthetic `loadtest` messages onto the market's real `orderbook:`
-channel in Redis (so any UI watching that market will see them).
+DEV STACK ONLY: it publishes synthetic messages to a dedicated `loadtest:run-<timestamp>` channel
+(the gateway must run with WS_LOADTEST_ENABLED=true, which it refuses in production). No real market,
+order book or UI channel is touched, so nothing a user could see is affected.
 
 What is measured. A publisher process writes messages through the production publisher (so seq,
 retention and fan-out are the real thing), each carrying `t_ns` = wall-clock ns at publish. A client
@@ -31,11 +32,11 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-import httpx
 import redis.asyncio as aioredis
 from websockets.asyncio.client import connect
 from websockets.typing import Origin
 
+from app.realtime import channels as rt_channels
 from app.realtime import publisher
 
 
@@ -148,11 +149,9 @@ async def main() -> int:
         print("refusing to publish synthetic messages to a non-local Redis (use --force)")
         return 2
     apis = [a.strip().rstrip("/") for a in args.api.split(",") if a.strip()]
-    async with httpx.AsyncClient() as http:
-        markets = (await http.get(f"{apis[0]}/api/v1/markets")).json()
-    market = next(m for m in markets if m["is_primary"])["market_id"]
-    channels = [f"orderbook:{market}", f"trades:{market}", f"price:{market}"]
-    load_channel = channels[0]
+    # A dedicated synthetic channel: no real market, order book or UI ever sees these messages.
+    load_channel = f"loadtest:run-{int(time.time())}"
+    channels = [load_channel]
     urls = [a.replace("http", "ws", 1) + "/ws" for a in apis]
 
     redis = aioredis.from_url(args.redis, decode_responses=True)
@@ -205,6 +204,12 @@ async def main() -> int:
     done.set()
     lag_stop.set()
     await asyncio.gather(*tasks, lag_task, return_exceptions=True)
+    await redis.delete(  # leave nothing behind: the channel is synthetic
+        rt_channels.seq_key(load_channel),
+        rt_channels.stream_key(load_channel),
+        rt_channels.latest_key(load_channel),
+        rt_channels.epoch_key(load_channel),
+    )
     await redis.aclose()
 
     expected = args.messages

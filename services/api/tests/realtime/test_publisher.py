@@ -11,6 +11,12 @@ from app.realtime import channels, publisher, streams
 from app.realtime.channels import Kind, Retention
 
 MID = "0x" + "ab" * 32
+
+
+async def epoch_of(redis: aioredis.Redis) -> str:
+    return (await streams.head(redis, CH)).epoch
+
+
 CH = f"price:{MID}"
 
 
@@ -59,7 +65,7 @@ async def test_concurrent_publishers_deliver_strictly_increasing_seq_without_gap
     for c in clients:
         await c.aclose()
     assert seqs == list(range(1, total + 1))  # strictly increasing, no gaps, no reordering
-    assert await streams.head_seq(redis, CH) == total
+    assert (await streams.head(redis, CH)).seq == total
 
 
 async def test_old_publisher_pattern_does_reorder(redis: aioredis.Redis) -> None:
@@ -82,12 +88,21 @@ async def test_old_publisher_pattern_does_reorder(redis: aioredis.Redis) -> None
 async def test_replay_is_exact_and_contiguous(redis: aioredis.Redis) -> None:
     for i in range(10):
         await publisher.publish(redis, CH, "price", {"i": i})
-    r = await streams.read_since(redis, CH, 6, max_messages=100)
-    assert r.resync is None and r.head == 10
+    r = await streams.read_since(redis, CH, await epoch_of(redis), 6, max_messages=100)
+    assert r.resync is None and r.head.seq == 10
     assert [s for s, _ in r.messages] == [7, 8, 9, 10]
     env = json.loads(r.messages[0][1])
-    assert env == {"type": "price", "channel": CH, "seq": 7, "ts": env["ts"], "data": {"i": 6}}
-    assert (await streams.read_since(redis, CH, 10, max_messages=100)).messages == []
+    assert env == {
+        "type": "price",
+        "channel": CH,
+        "epoch": r.head.epoch,
+        "seq": 7,
+        "ts": env["ts"],
+        "data": {"i": 6},
+    }
+    assert (
+        await streams.read_since(redis, CH, await epoch_of(redis), 10, max_messages=100)
+    ).messages == []
 
 
 async def test_resync_reasons(redis: aioredis.Redis) -> None:
@@ -99,9 +114,15 @@ async def test_resync_reasons(redis: aioredis.Redis) -> None:
     finally:
         channels.configure_retention({Kind.PRICE: saved})
 
-    assert (await streams.read_since(redis, CH, 2, max_messages=100)).resync == "too_old"
-    assert (await streams.read_since(redis, CH, 99, max_messages=100)).resync == "ahead_of_head"
-    assert (await streams.read_since(redis, CH, 0, max_messages=3)).resync == "too_many"
+    assert (
+        await streams.read_since(redis, CH, await epoch_of(redis), 2, max_messages=100)
+    ).resync == "too_old"
+    assert (
+        await streams.read_since(redis, CH, await epoch_of(redis), 99, max_messages=100)
+    ).resync == "ahead_of_head"
+    assert (
+        await streams.read_since(redis, CH, await epoch_of(redis), 0, max_messages=3)
+    ).resync == "too_many"
 
 
 async def test_age_retention_drops_old_entries(redis: aioredis.Redis) -> None:
@@ -114,14 +135,26 @@ async def test_age_retention_drops_old_entries(redis: aioredis.Redis) -> None:
     finally:
         channels.configure_retention({Kind.PRICE: saved})
     assert await redis.xlen(channels.stream_key(CH)) == 1
-    assert (await streams.read_since(redis, CH, 0, max_messages=10)).resync == "too_old"
-    assert [s for s, _ in (await streams.read_since(redis, CH, 1, max_messages=10)).messages] == [2]
+    assert (
+        await streams.read_since(redis, CH, await epoch_of(redis), 0, max_messages=10)
+    ).resync == "too_old"
+    assert [
+        s
+        for s, _ in (
+            await streams.read_since(redis, CH, await epoch_of(redis), 1, max_messages=10)
+        ).messages
+    ] == [2]
 
 
 async def test_keys_share_a_hash_tag_and_latest_matches_seq(redis: aioredis.Redis) -> None:
     await publisher.publish(redis, CH, "price", {"x": 1}, keep_latest=True)
     p = await publisher.publish(redis, CH, "price", {"x": 2}, keep_latest=True)
-    keys = {channels.seq_key(CH), channels.stream_key(CH), channels.latest_key(CH)}
+    keys = {
+        channels.seq_key(CH),
+        channels.stream_key(CH),
+        channels.latest_key(CH),
+        channels.epoch_key(CH),
+    }
     assert {k.split("}")[0] for k in keys} == {"{chan:" + CH}
     assert json.loads(str(await redis.get(channels.latest_key(CH))))["seq"] == p.seq == 2
 
@@ -144,3 +177,31 @@ def test_channel_parser_rejects_malformed_names() -> None:
         "x" * 300,
     ]:
         assert channels.parse(bad) is None, bad
+
+
+async def test_epoch_is_stable_while_state_lives_and_changes_after_loss(
+    redis: aioredis.Redis,
+) -> None:
+    first = await publisher.publish(redis, CH, "price", {"i": 0})
+    second = await publisher.publish(redis, CH, "price", {"i": 1})
+    assert first.epoch == second.epoch and (first.seq, second.seq) == (1, 2)
+    await redis.flushdb()  # a Redis reset: the seq space restarts, so the epoch must too
+    third = await publisher.publish(redis, CH, "price", {"i": 2})
+    assert third.seq == 1 and third.epoch != first.epoch
+
+
+async def test_epoch_exists_before_the_first_publish_and_publish_keeps_it(
+    redis: aioredis.Redis,
+) -> None:
+    h = await streams.head(redis, CH)
+    assert h.seq == 0 and len(h.epoch) == 16
+    assert (await streams.head(redis, CH)).epoch == h.epoch
+    p = await publisher.publish(redis, CH, "price", {"i": 0})
+    assert p.epoch == h.epoch and p.seq == 1
+
+
+async def test_resume_with_another_epoch_is_a_resync(redis: aioredis.Redis) -> None:
+    for i in range(5):
+        await publisher.publish(redis, CH, "price", {"i": i})
+    r = await streams.read_since(redis, CH, "not-the-epoch", 3, max_messages=100)
+    assert r.resync == "epoch_changed" and r.messages == [] and r.head.seq == 5

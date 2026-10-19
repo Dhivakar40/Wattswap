@@ -110,7 +110,7 @@ class Client:
         return out
 
     async def subscribe(
-        self, *channels: str, resume: dict[str, int] | None = None
+        self, *channels: str, resume: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"op": "subscribe", "channels": list(channels), "id": "s1"}
         if resume is not None:

@@ -8,16 +8,15 @@ import asyncio
 import time
 
 from tests.conftest import Harness, SettingsFactory
-from tests.realtime.kit import MID, Live, pub, seed_market
+from tests.realtime.kit import Live, pub
 
-BOOK = f"orderbook:{MID}"
+CHANNEL = "loadtest:smoke"  # dedicated synthetic channel, no real market involved
 CLIENTS = 100
 MESSAGES = 60
 
 
 async def test_100_clients_receive_every_message_in_order(make_settings: SettingsFactory) -> None:
-    async with Harness(make_settings(ws_max_conn_per_ip=1000)) as h:
-        await seed_market(h)
+    async with Harness(make_settings(ws_max_conn_per_ip=1000, ws_loadtest_enabled=True)) as h:
         async with Live(h) as lv:
             results: list[tuple[list[int], list[float]]] = []
 
@@ -25,7 +24,7 @@ async def test_100_clients_receive_every_message_in_order(make_settings: Setting
                 seqs: list[int] = []
                 lat: list[float] = []
                 async with lv.connect() as c:
-                    await c.subscribe(BOOK)
+                    await c.subscribe(CHANNEL)
                     ready.release()
                     while len(seqs) < MESSAGES:
                         m = await c.recv(15)
@@ -39,7 +38,7 @@ async def test_100_clients_receive_every_message_in_order(make_settings: Setting
             for _ in range(CLIENTS):
                 await asyncio.wait_for(ready.acquire(), 30)
             for i in range(MESSAGES):
-                await pub(h, BOOK, "loadtest", n=i, t_ns=time.time_ns())
+                await pub(h, CHANNEL, "loadtest", n=i, t_ns=time.time_ns())
                 await asyncio.sleep(0.02)
             await asyncio.wait_for(asyncio.gather(*tasks), 60)
 

@@ -190,6 +190,7 @@ REST remains the source of truth; the socket delivers **deltas** and REST delive
 
 ```bash
 # anonymous, public channels (dev only: a missing Origin is accepted when API_ENV=development)
+# NOTE: an unset API_ENV means production; local dev sets API_ENV=development explicitly.
 npx wscat -c ws://localhost:8000/ws
 > {"op":"subscribe","channels":["price:0x…marketId"],"id":"1"}
 # in a browser-like context pass the Origin and, for user:/meter: channels, the session cookie
@@ -201,7 +202,7 @@ npx wscat -c ws://localhost:8000/ws -H "Origin: http://localhost:3000" -H "Cooki
 | Rule | Behaviour |
 |---|---|
 | **Origin allow-list** | The `Origin` header must exactly match `API_CORS_ORIGINS` or `WS_EXTRA_ORIGINS` (case-insensitive, trailing `/` ignored). Anything else is refused **before the upgrade** with `HTTP 403`. Cookies alone do not stop cross-site WebSocket hijacking (a browser attaches them to any site's socket), so this check is mandatory. |
-| **Missing Origin** | Non-browser clients (wscat, scripts) send none. It is accepted **only if `API_ENV` was explicitly set to `development`**. Unset or any other value (`test`, `production`) refuses it with `403`. |
+| **Missing Origin** | Non-browser clients (wscat, scripts) send none. It is accepted **only when `API_ENV=development`**. `API_ENV` defaults to `production`, so an unset value, `test` and `production` all refuse it with `403`. |
 | **Authentication** | The `wattswap_session` cookie from `POST /auth/login`, read at the handshake. No token in the URL or in a first message, so credentials never reach logs. No cookie, or an invalid/revoked one, means an anonymous socket: public channels only. |
 | **Authorization** | `user:{address}` only for the address in the JWT. `meter:{meterId}` only for the meter's owner. A failed subscribe is an `error` frame; the socket stays open and nothing from that channel is ever sent. |
 | **Session end** | Logout closes that session's sockets on **every replica** with `4401 session_revoked` (a `ws:control` Redis message, backed by a denylist re-check every `WS_DENYLIST_POLL_SECONDS` in case that message is lost). JWT expiry closes the socket at `exp` with `4401 session_expired`. |
@@ -222,6 +223,7 @@ in requests and normalised). Unknown markets are refused (`unknown_market`).
 | `trades:{market}` | public | `trade` | when a settlement is confirmed | 5 000 / 10 min |
 | `user:{address}` | that address | `order`, `fill` | every change to the user's orders / trades | 1 000 / 30 min |
 | `meter:{meterId}` | the meter's owner | `reading`, `mint` | reading ingest; mint worker transitions | 1 000 / 30 min |
+| `loadtest:{name}` | public, **dev only** (`WS_LOADTEST_ENABLED=true`, refused when `API_ENV=production`) | any | `make ws-load` | 1 000 / 1 min |
 
 Retention windows are env-configurable (`WS_RETAIN_*`). A message is retained until it is older than the window **or**
 the count is exceeded, whichever comes first.
@@ -231,14 +233,15 @@ the count is exceeded, whichever comes first.
 ### Server → client data frame (the envelope)
 
 ```json
-{"type":"orderbook","channel":"orderbook:0x7f…","seq":412,"ts":1792401331,"data":{ … }}
+{"type":"orderbook","channel":"orderbook:0x7f…","epoch":"9c1f03ab77d2e418","seq":412,"ts":1792401331,"data":{ … }}
 ```
 
 | Field | Meaning |
 |---|---|
 | `type` | Message kind (see below). |
 | `channel` | The channel it belongs to. |
-| `seq` | Per-channel counter, **+1 per message, no gaps**. Allocated atomically with the publish, so order on the wire equals `seq` order. |
+| `epoch` | Random id of the channel's stream, created when its state is first created and **recreated if that state is lost** (a Redis reset). A `seq` is only comparable within one epoch. Remember it with `seq`. |
+| `seq` | Per-channel counter within the epoch, **+1 per message, no gaps**. Allocated atomically with the publish, so order on the wire equals `seq` order. |
 | `ts` | Unix seconds at publish. |
 | `data` | Type-specific body. Amounts and prices are decimal **strings** (Wh; mUSDC base units per kWh); never JS floats. |
 
@@ -281,9 +284,9 @@ explains a price move from the same message that moved it.
 
 | `type` | Body | When |
 |---|---|---|
-| `subscribed` | `ref`, `channels:[{channel, seq, replayed}]` | After a subscribe. `seq` = the channel head when the subscription went live; the live stream continues at `seq + 1`. `replayed` = messages replayed just before this frame (resume). |
+| `subscribed` | `ref`, `channels:[{channel, epoch, seq, replayed}]` | After a subscribe. `epoch`/`seq` = the channel's epoch and head when the subscription went live; the live stream continues at `seq + 1`. `replayed` = messages replayed just before this frame (resume). |
 | `unsubscribed` | `ref`, `channels:[…]` | After an unsubscribe. |
-| `resync` | `channel`, `reason`, `seq` | The log cannot cover what the client missed. Re-fetch the REST snapshot. `reason`: `too_old` (outside the retention window), `ahead_of_head` (client seq > head; Redis was reset), `too_many` (more than `WS_RESUME_MAX_MESSAGES` missed), `overflow`. `seq` is the current head. |
+| `resync` | `channel`, `reason`, `epoch`, `seq` | The client cannot be brought up to date from the log: re-fetch the REST snapshot. `reason`: `epoch_changed` (the channel's state was lost and recreated; also sent on a **live** socket right before the first message of the new epoch, whose seqs restart), `too_old` (outside the retention window), `ahead_of_head` (client seq > head of the same epoch), `too_many` (more than `WS_RESUME_MAX_MESSAGES` missed). `epoch`/`seq` are the channel's current epoch and head. |
 | `error` | `code`, `message`, `ref?`, `channel?` | A request failed; the socket stays open. Codes: `bad_channel`, `unknown_market`, `unauthorized`, `forbidden`, `too_many_subscriptions`, `rate_limited`, `bad_message`. |
 | `ping` | `ts` | Every `WS_PING_SECONDS` (20 s). Reply `{"op":"pong"}` (any inbound frame also counts as liveness). |
 | `pong` | `ref?` | Reply to a client `ping`. |
@@ -293,39 +296,39 @@ explains a price move from the same message that moved it.
 All frames are JSON text, ≤ `WS_MAX_MESSAGE_BYTES` (4 KiB), strictly validated (unknown fields are rejected).
 
 ```json
-{"op":"subscribe","channels":["orderbook:0x7f…","user:0x9965…"],"id":"1","resume":{"orderbook:0x7f…":412}}
+{"op":"subscribe","channels":["orderbook:0x7f…","user:0x9965…"],"id":"1","resume":{"orderbook:0x7f…":{"epoch":"9c1f03ab77d2e418","seq":412}}}
 {"op":"unsubscribe","channels":["orderbook:0x7f…"],"id":"2"}
 {"op":"ping","id":"3"}
 {"op":"pong"}
 ```
-`resume` maps a channel to the **last seq the client applied**; the server replays everything after it, in order,
-*before* the `subscribed` frame. Subscribing to an already-joined channel is idempotent.
+`resume` maps a channel to the **epoch and last seq the client applied** (both are required). If the epoch still matches and the log
+covers the gap, the server replays everything after `seq`, in order, *before* the `subscribed` frame; otherwise it sends `resync`. Subscribing to an already-joined channel is idempotent.
 
 Example session (`→` client, `←` server):
 ```
 → {"op":"subscribe","channels":["orderbook:0x7f…"],"id":"1"}
-← {"type":"subscribed","ref":"1","channels":[{"channel":"orderbook:0x7f…","seq":411,"replayed":0}]}
-← {"type":"orderbook","channel":"orderbook:0x7f…","seq":412,"ts":1792401331,"data":{…}}
+← {"type":"subscribed","ref":"1","channels":[{"channel":"orderbook:0x7f…","epoch":"9c1f03ab77d2e418","seq":411,"replayed":0}]}
+← {"type":"orderbook","channel":"orderbook:0x7f…","epoch":"9c1f03ab77d2e418","seq":412,"ts":1792401331,"data":{…}}
 ← {"type":"ping","ts":1792401351}
 → {"op":"pong"}
 ```
 
 ## Staying consistent: snapshot + delta
 
-REST snapshots tell you *what is true now and which `seq` that corresponds to*. The socket then sends everything after that seq.
+REST snapshots tell you *what is true now and which `(epoch, seq)` that corresponds to*. The socket then sends everything after that seq.
 
-| Snapshot | `seq` of channel | How the seq is returned |
+| Snapshot | Channel | How `epoch` and `seq` are returned |
 |---|---|---|
-| `GET /markets/{id}/book` | `orderbook:{market}` | body field `seq` |
-| `GET /markets/{id}/trades` | `trades:{market}` | response header `X-Channel-Seq` |
-| `GET /orders`, `GET /trades` (yours) | `user:{you}` | response header `X-Channel-Seq` |
-| `GET /markets/{id}/price` | `price:{market}` | body field `seq` |
+| `GET /markets/{id}/book` | `orderbook:{market}` | body fields `epoch`, `seq` |
+| `GET /markets/{id}/trades` | `trades:{market}` | response headers `X-Channel-Epoch`, `X-Channel-Seq` |
+| `GET /orders`, `GET /trades` (yours) | `user:{you}` | response headers `X-Channel-Epoch`, `X-Channel-Seq` |
+| `GET /markets/{id}/price` | `price:{market}` | body fields `epoch`, `seq` |
 
-**`X-Channel-Seq`** is listed in `Access-Control-Expose-Headers`, so a script on an allowed web origin can read it
-(`fetch(url,{credentials:"include"}).then(r => r.headers.get("x-channel-seq"))`). Without that header a browser
-hides it from cross-origin pages.
+**`X-Channel-Seq` and `X-Channel-Epoch`** are listed in `Access-Control-Expose-Headers`, so a script on an allowed web origin can
+read them (`fetch(url,{credentials:"include"}).then(r => r.headers.get("x-channel-epoch"))`). Without that a browser hides
+them from cross-origin pages.
 
-**The server reads the channel's head seq *before* it reads the data.** Therefore every change after the snapshot has a
+**The server reads the channel's head `(epoch, seq)` *before* it reads the data.** Therefore every change after the snapshot has a
 `seq` greater than the one returned; a change committed in between may appear in both the snapshot and a delta.
 That is safe because **deltas are idempotent by construction** — `orderbook` replaces the whole book, `order`/`fill`
 upsert by `order_hash`/`id`, `trade` is keyed by `id`, `price`/`forecast` replace. This is a rule for every new message type.
@@ -333,12 +336,12 @@ upsert by `order_hash`/`id`, `trade` is keyed by `id`, `price`/`forecast` replac
 Client algorithm (per channel; reference implementation: `services/api/dev/ws_sync.py`, tested in
 `tests/realtime/test_sync_protocol.py`):
 
-1. Connect, `subscribe`. Receive `subscribed{seq: S0}`. **Buffer** all deltas.
-2. `GET` the REST snapshot → `(data, Ssnap)`.
-3. Install the snapshot; apply buffered deltas with `seq > Ssnap` in order, dropping `seq <= Ssnap`. The first applied must be `Ssnap + 1`; if the buffer starts later, the snapshot was too old — fetch again.
-4. Live: `seq == last+1` → apply; `seq <= last` → ignore (duplicate); `seq > last+1` → **gap**: stop applying, buffer, go to step 2 (re-fetch snapshot).
+1. Connect, `subscribe`. Receive `subscribed{epoch: E, seq: S0}`. **Buffer** all deltas.
+2. `GET` the REST snapshot → `(data, E', Ssnap)`.
+3. Install the snapshot; apply buffered deltas **of epoch E'** with `seq > Ssnap` in order, dropping `seq <= Ssnap` and any other epoch. The first applied must be `Ssnap + 1`; if the buffer starts later, or its newest message is from a different epoch than the snapshot, the snapshot was too old — fetch again.
+4. Live: **epoch differs → the channel was reset: stop applying, buffer, go to step 2** (never compare seqs across epochs: after a reset the new messages start at seq 1 and would look like duplicates). Same epoch: `seq == last+1` → apply; `seq <= last` → ignore (duplicate); `seq > last+1` → **gap**: stop applying, buffer, go to step 2.
 5. On `resync` for the channel: go to step 2.
-6. On reconnect: `subscribe` again with `resume:{channel: last}`; if the server answers `resync`, go to step 2, otherwise the replay continues seamlessly (no snapshot needed).
+6. On reconnect: `subscribe` again with `resume:{channel:{epoch, seq: last}}`; if the server answers `resync`, go to step 2, otherwise the replay continues seamlessly (no snapshot needed).
 
 ```mermaid
 sequenceDiagram
@@ -365,12 +368,17 @@ sequenceDiagram
     A-->>C: snapshot {seq: 416}
     Note over C: state = snapshot; deltas > 416 apply from here
     C--xG: connection drops
-    C->>G: subscribe (resume: {orderbook: 418})
+    C->>G: subscribe (resume: {orderbook: {epoch: E, seq: 418}})
     G->>R: XRANGE seq > 418 up to head (421)
     G-->>C: 419, 420, 421 (replayed in order)
     G-->>C: subscribed {seq: 421, replayed: 3}
     Note over C: no snapshot needed
 ```
+
+**Epoch change (Redis reset).** If the channel's state is lost, its next publish creates a new epoch and restarts `seq` at 1.
+A connected client then receives `resync{reason:"epoch_changed"}` followed by messages whose `epoch` differs from the one it holds;
+a reconnecting client's `resume` is answered with the same `resync`. Either way the client re-snapshots; it never silently
+ignores the new messages. Covered by `test_redis_flush_mid_session_is_detected_and_the_client_resyncs`.
 
 Resume safety: the server subscribes to live delivery first, buffers live messages, replays `last+1 .. head` from the
 retained log, then flushes buffered live messages with `seq > head` — so there is neither a hole nor a duplicate.
@@ -409,7 +417,8 @@ Suggested reconnect policy: exponential backoff 0.5 s → 30 s with jitter; trea
 
 Any number of API processes can serve `/ws`. Every message is published to Redis by whichever process produced it
 (matcher, listener, pricing engine, REST handlers) using one atomic script that allocates the `seq`, appends to the
-channel's stream and broadcasts. Each gateway keeps **one** Redis subscription per channel it has local clients
+channel's stream and broadcasts. The envelope is serialized once there; each gateway parses it once per message to read
+`(epoch, seq)` and hands the **same string object** to every local client (`test_one_parse_and_one_shared_string_for_all_clients`). Each gateway keeps **one** Redis subscription per channel it has local clients
 for. A client may connect to any replica, and may resume on a different one than it left.
 Proof: `make ws-fanout-demo` (two replicas in docker compose; a trade driven through replica 2 reaches clients on both
 with identical `(channel, seq)` sequences) and `tests/realtime/test_replicas.py`.
@@ -417,7 +426,7 @@ with identical `(channel, seq)` sequences) and `tests/realtime/test_replicas.py`
 If a gateway loses its Redis pub/sub connection it reconnects, re-subscribes, and replays every local socket from its
 own last-sent seq (or sends `resync`).
 
-Redis keys are hash-tagged per channel (`{chan:<channel>}:seq|stream|latest`) so the publish script stays valid on Redis Cluster.
+Redis keys are hash-tagged per channel (`{chan:<channel>}:seq|stream|latest|epoch`) so the publish script stays valid on Redis Cluster.
 
 ## Metrics
 
@@ -425,4 +434,4 @@ Redis keys are hash-tagged per channel (`{chan:<channel>}:seq|stream|latest`) so
 
 ## Load test
 
-`make ws-load ARGS="--clients 500 --messages 200 --rate 10"` (dev stack only). Results and method: `docs/phases/phase-5.md`.
+`WS_LOADTEST_ENABLED=true WS_MAX_CONN_PER_IP=2000 docker compose up -d api` then `make ws-load ARGS="--clients 500 --messages 200 --rate 10"` (dev stack only; it publishes to a dedicated `loadtest:run-<timestamp>` channel, never to a real market). Results and method: `docs/phases/phase-5.md`.

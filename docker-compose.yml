@@ -46,10 +46,11 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
     environment:
-      API_ENV: ${API_ENV:-development}
+      API_ENV: development  # the local dev stack; production deploys do not use this file
       API_LOG_LEVEL: ${API_LOG_LEVEL:-INFO}
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:3000}
       WS_EXTRA_ORIGINS: ${WS_EXTRA_ORIGINS:-}
+      WS_LOADTEST_ENABLED: ${WS_LOADTEST_ENABLED:-false}
       WS_MAX_SUBSCRIPTIONS: ${WS_MAX_SUBSCRIPTIONS:-20}
       WS_MAX_MESSAGE_BYTES: ${WS_MAX_MESSAGE_BYTES:-4096}
       WS_MAX_CONN_PER_IP: ${WS_MAX_CONN_PER_IP:-20}
@@ -135,7 +136,7 @@ services:
       dockerfile: services/api/Dockerfile
     command: ["python", "-m", "app.pricing.run"]
     environment:
-      API_ENV: ${API_ENV:-development}
+      API_ENV: development  # the local dev stack; production deploys do not use this file
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wattswap}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wattswap}
       REDIS_URL: redis://redis:6379/0
       RPC_URL: http://anvil:8545
@@ -159,7 +160,7 @@ services:
       dockerfile: services/api/Dockerfile
     command: ["python", "-m", "app.trading.run"]
     environment:
-      API_ENV: ${API_ENV:-development}
+      API_ENV: development  # the local dev stack; production deploys do not use this file
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-wattswap}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wattswap}
       REDIS_URL: redis://redis:6379/0
       RPC_URL: http://anvil:8545

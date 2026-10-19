@@ -31,7 +31,8 @@ async def test_subscribe_receive_unsubscribe(live: Live) -> None:
         s1 = await pub(live.h, PRICE, x=1)
         msg = await c.recv_type("price")
         assert (msg["channel"], msg["seq"], msg["data"]) == (PRICE, s1, {"x": 1})
-        assert set(msg) == {"type", "channel", "seq", "ts", "data"}
+        assert set(msg) == {"type", "channel", "epoch", "seq", "ts", "data"}
+        assert msg["epoch"] == sub["channels"][0]["epoch"]  # PRICE is the first channel
 
         await c.send(op="unsubscribe", channels=[PRICE], id="u1")
         un = await c.recv_type("unsubscribed")
@@ -190,3 +191,19 @@ def test_retention_defaults_match_the_documented_windows() -> None:
     assert channels.retention_for(f"orderbook:{MID}") == channels.Retention(5000, 600)
     assert channels.retention_for(f"user:0x{'1' * 40}") == channels.Retention(1000, 1800)
     assert channels.retention_for(PRICE) == channels.Retention(500, 3600)
+
+
+async def test_loadtest_channel_is_refused_unless_enabled(make_settings: SettingsFactory) -> None:
+    async with Harness(make_settings()) as h, Live(h) as lv, lv.connect() as c:
+        await c.send(op="subscribe", channels=["loadtest:x"])
+        err = await c.recv_type("error")
+        assert err["code"] == "bad_channel" and err["channel"] == "loadtest:x"
+    async with Harness(make_settings(ws_loadtest_enabled=True)) as h, Live(h) as lv:
+        async with lv.connect() as c:
+            sub = await c.subscribe("loadtest:x")
+            assert sub["channels"][0]["channel"] == "loadtest:x"
+            await pub(h, "loadtest:x", "loadtest", n=1)
+            assert (await c.recv_type("loadtest"))["seq"] == 1
+        async with lv.connect() as c:  # names are validated like every other channel
+            await c.send(op="subscribe", channels=["loadtest:Bad Name!", "loadtest:" + "a" * 40])
+            assert [(await c.recv_type("error"))["code"] for _ in range(2)] == ["bad_channel"] * 2

@@ -98,6 +98,7 @@ class BookOut(BaseModel):
     asks: list[BookLevel]
     ts: int
     seq: int | None = None  # `orderbook:{market}` seq this snapshot is consistent with
+    epoch: str | None = None  # ... and that channel's stream epoch
 
 
 class OrderConfigOut(BaseModel):

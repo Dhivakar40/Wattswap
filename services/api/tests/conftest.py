@@ -37,6 +37,10 @@ from alembic import command
 from app.core.config import Settings
 from app.main import create_app
 
+# An unset API_ENV means production (strict secrets, no missing-Origin /ws clients), so the test
+# config says what it is. Tests of the unset behaviour remove the variable explicitly.
+os.environ.setdefault("API_ENV", "test")
+
 API_DIR = Path(__file__).resolve().parents[1]
 REPO = API_DIR.parents[1]
 CONTRACTS = REPO / "contracts"

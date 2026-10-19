@@ -263,6 +263,10 @@ class Gateway:
 
     async def _authorize(self, conn: Connection, ch: Channel) -> protocol.Error | None:
         """None if allowed, else the error frame to send (without ref/channel)."""
+        if ch.kind == Kind.LOADTEST:
+            if not self.settings.ws_loadtest_enabled:
+                return protocol.Error(code="bad_channel", message="channel not available")
+            return None
         if ch.kind in (Kind.PRICE, Kind.FORECAST, Kind.ORDERBOOK, Kind.TRADES):
             if ch.arg not in await self._known_markets():
                 return protocol.Error(code="unknown_market", message="no such market")
@@ -278,7 +282,7 @@ class Gateway:
         return None
 
     async def _subscribe(self, conn: Connection, req: protocol.Subscribe) -> None:
-        resume = {k.lower(): v for k, v in (req.resume or {}).items()}
+        resume = {k.lower(): (v.epoch, v.seq) for k, v in (req.resume or {}).items()}
         done: list[protocol.SubscribedChannel] = []
         joined: list[str] = []
         for name in dict.fromkeys(req.channels):  # de-duplicate, keep order
@@ -294,8 +298,9 @@ class Gateway:
                 )
                 continue
             if ch.name in conn.subs:  # idempotent
+                st = conn.subs[ch.name]
                 done.append(
-                    protocol.SubscribedChannel(channel=ch.name, seq=conn.subs[ch.name].last_sent)
+                    protocol.SubscribedChannel(channel=ch.name, epoch=st.epoch, seq=st.last_sent)
                 )
                 continue
             if len(conn.subs) >= self.settings.ws_max_subscriptions:
@@ -328,7 +333,11 @@ class Gateway:
                     )
                 )
                 continue
-            done.append(protocol.SubscribedChannel(channel=ch.name, seq=head, replayed=replayed))
+            done.append(
+                protocol.SubscribedChannel(
+                    channel=ch.name, epoch=head.epoch, seq=head.seq, replayed=replayed
+                )
+            )
             joined.append(ch.name)
         if done:
             conn.send(protocol.Subscribed(ref=req.id, channels=done))

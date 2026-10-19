@@ -72,7 +72,7 @@ async def publish_book(
                     book = await book_levels(s, market_id, now)
                 body = book.model_dump(mode="json")
                 published = await publish(redis, book_channel(market_id), "orderbook", body)
-                body["seq"] = published.seq
+                body["seq"], body["epoch"] = published.seq, published.epoch
                 await redis.set(
                     book_key(market_id), json.dumps(body, separators=(",", ":")), ex=3600
                 )

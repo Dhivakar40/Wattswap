@@ -5,11 +5,17 @@ could deliver seq 6 before seq 5 and a client would read that as a gap. Here the
 is allocated, the envelope retained (`XADD`, id = `<seq>-0`) and broadcast (`PUBLISH`) inside a
 single script, so delivery order on a channel always equals seq order.
 
-Retention is by count (exact `MAXLEN`) and by age (the oldest entries are deleted once older than the
-window), both per channel kind. Keys are hash-tagged per channel (see `channels`).
+Every channel has an **epoch**: a random id created when the channel's keys are first created and
+recreated after they are lost (a Redis flush/restart without persistence). It is carried in every
+envelope, so a client that sees the epoch change knows the seq space restarted and re-snapshots,
+instead of treating the new low seqs as duplicates.
+
+Retention is by count (exact `MAXLEN`) and by age (the oldest entries are deleted once older than
+the window), both per channel kind. Keys are hash-tagged per channel (see `channels`).
 """
 
 import json
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -18,12 +24,15 @@ import redis.asyncio as aioredis
 
 from app.realtime import channels
 
-# KEYS: seq, stream, latest
-# ARGV: type_json, channel_json, ts, data_json, max_len, max_age_ms, now_ms, set_latest, channel
+# KEYS: seq, stream, latest, epoch
+# ARGV: type_json, channel_json, ts, data_json, max_len, max_age_ms, now_ms, set_latest, channel,
+#       candidate_epoch
 _SCRIPT = """
+redis.call('SET', KEYS[4], ARGV[10], 'NX')
+local epoch = redis.call('GET', KEYS[4])
 local seq = redis.call('INCR', KEYS[1])
-local body = '{"type":' .. ARGV[1] .. ',"channel":' .. ARGV[2] .. ',"seq":' .. seq
-  .. ',"ts":' .. ARGV[3] .. ',"data":' .. ARGV[4] .. '}'
+local body = '{"type":' .. ARGV[1] .. ',"channel":' .. ARGV[2] .. ',"epoch":"' .. epoch
+  .. '","seq":' .. seq .. ',"ts":' .. ARGV[3] .. ',"data":' .. ARGV[4] .. '}'
 redis.call('XADD', KEYS[2], 'MAXLEN', ARGV[5], seq .. '-0', 'm', body, 't', ARGV[7])
 local cutoff = tonumber(ARGV[7]) - tonumber(ARGV[6])
 for _ = 1, 100 do
@@ -33,7 +42,7 @@ for _ = 1, 100 do
 end
 if ARGV[8] == '1' then redis.call('SET', KEYS[3], body) end
 local receivers = redis.call('PUBLISH', ARGV[9], body)
-return {seq, receivers}
+return {seq, receivers, epoch}
 """
 
 
@@ -41,6 +50,11 @@ return {seq, receivers}
 class Published:
     seq: int
     receivers: int
+    epoch: str
+
+
+def new_epoch() -> str:
+    return secrets.token_hex(8)
 
 
 def _dumps(value: object) -> str:
@@ -66,6 +80,7 @@ async def publish(
             channels.seq_key(channel),
             channels.stream_key(channel),
             channels.latest_key(channel),
+            channels.epoch_key(channel),
         ],
         args=[
             _dumps(type_),
@@ -77,6 +92,7 @@ async def publish(
             now_ms,
             "1" if keep_latest else "0",
             channel,
+            new_epoch(),
         ],
     )
-    return Published(int(result[0]), int(result[1]))
+    return Published(int(result[0]), int(result[1]), str(result[2]))

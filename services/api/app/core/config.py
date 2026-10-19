@@ -32,7 +32,10 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    api_env: Literal["development", "test", "production"] = "development"
+    # Secure by default: an unset API_ENV is "production" everywhere it is read (strict secrets,
+    # fail-fast chain checks, no missing-Origin /ws clients). Local dev sets API_ENV=development
+    # explicitly (.env.example, docker-compose); the test suite sets "test".
+    api_env: Literal["development", "test", "production"] = "production"
     api_log_level: str = "INFO"
     api_cors_origins: str = "http://localhost:3000"
     database_url: str = (
@@ -160,6 +163,8 @@ class Settings(BaseSettings):
     ws_ping_seconds: float = Field(default=20.0, gt=0)  # server ping; closed after 2 missed
     ws_denylist_poll_seconds: float = Field(default=30.0, gt=0)
     ws_resume_max_messages: int = Field(default=1000, ge=1)
+    # Dev-only synthetic `loadtest:{name}` channels for `make ws-load`; refused in production.
+    ws_loadtest_enabled: bool = False
     # Retained stream windows (resume): count and age per channel class.
     ws_retain_public_len: int = Field(default=5000, ge=10)
     ws_retain_public_age_seconds: int = Field(default=600, ge=10)
@@ -180,9 +185,9 @@ class Settings(BaseSettings):
 
     @property
     def ws_allow_missing_origin(self) -> bool:
-        """A /ws handshake without an Origin header (a non-browser client) is accepted only when
-        API_ENV was EXPLICITLY set to "development". Unset, or any other value, refuses it."""
-        return "api_env" in self.model_fields_set and self.api_env == "development"
+        """A /ws handshake without an Origin header (a non-browser client) is accepted only in
+        development. An unset API_ENV is production, so it is refused."""
+        return self.api_env == "development"
 
     @property
     def cors_origins(self) -> list[str]:
@@ -217,6 +222,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_safety(self) -> "Settings":
+        if self.api_env == "production" and self.ws_loadtest_enabled:
+            raise ConfigError("WS_LOADTEST_ENABLED must not be set in production")
         if self.api_env == "production":
             secret = self.jwt_secret.get_secret_value()
             if secret == DEV_JWT_SECRET or len(secret) < 32:

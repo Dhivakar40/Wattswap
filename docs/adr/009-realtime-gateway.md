@@ -18,10 +18,15 @@ was retained for a reconnecting client, and the `INCR` + `PUBLISH` pair was two 
 2. **Redis Streams are the retained log**, so a client reconnecting inside the window resumes from its
    last seq instead of re-snapshotting. Retention is by count (exact `MAXLEN`) and by age, per channel
    class (public 5 000 / 10 min, user 1 000 / 30 min, price 500 / 1 h; env-configurable). Outside the
-   window, or if Redis was reset, the server answers `resync` and the client falls back to REST.
-   *Limitation:* there is no stream epoch, so if Redis is flushed and a channel is re-published past a
-   client's old seq, that client can be replayed the wrong history. Mitigation is operational (Redis
-   persistence); an epoch field is the next step if Redis is ever treated as ephemeral.
+   window the server answers `resync` and the client falls back to REST.
+2a. **Stream epoch.** Each channel has a random epoch, created with its state (`SET NX` in the publish script, or on
+   first subscribe/snapshot read) and therefore recreated after a Redis reset. It is in every envelope, in `subscribed`/`resync`,
+   in REST snapshots (`epoch` body field or `X-Channel-Epoch` header, exposed via CORS) and in every `resume` entry. A seq
+   is only comparable within one epoch: a resume with another epoch is answered `resync: epoch_changed`, and a *connected*
+   socket gets the same `resync` before the first message of a new epoch (the connection tracks the epoch per channel and
+   does not apply the "seq <= last is a duplicate" rule across epochs). Without it, after a flush the new low seqs would be
+   dropped as duplicates and the client would silently freeze on stale data. Limitation: the epoch covers loss of the
+   whole channel state (flush/restart); Redis must not evict individual keys (`maxmemory-policy noeviction`).
 3. **Keys are hash-tagged per channel** (`{chan:<channel>}:seq|stream|latest`) so the script touches
    one slot and stays valid on Redis Cluster. Pub/sub itself is cluster-wide.
 4. **Snapshot consistency = "read the seq first".** REST snapshots return the channel's head seq read
@@ -41,14 +46,22 @@ was retained for a reconnecting client, and the `INCR` + `PUBLISH` pair was two 
    the only credential (no token in the URL or first message, so it never reaches access logs or
    history). A browser attaches cookies to a WebSocket opened by *any* site, so the `Origin` header
    is checked against an exact allow-list and a mismatch is refused with HTTP 403 before the socket
-   exists. A missing Origin (non-browser client) is accepted only when `API_ENV` was **explicitly**
-   `development`.
+   exists. A missing Origin (non-browser client) is accepted only when `API_ENV=development`. **`API_ENV`
+   defaults to `production`**: an unset value gets strict secret validation, fatal chain checks and no
+   missing-Origin clients everywhere it is read (`test_unset_api_env_behaves_as_production_everywhere_it_is_read`).
+   Local dev sets `API_ENV=development` explicitly (`.env.example`, docker-compose, the Makefile for host-side tools);
+   the test suite sets `test`.
 8. **Session end is enforced on open sockets.** Each socket schedules its own close at the JWT `exp`
    (`4401`); logout publishes the `jti` on a Redis control channel so every replica closes that session's
    sockets, with a denylist re-check on the heartbeat as a backstop for a lost control message.
 9. **Fan-out**: one Redis pub/sub connection per process, channels subscribed on first local subscriber
-   and released on the last; the envelope string is forwarded unchanged (no per-client re-encode). If
+   and released on the last; the envelope is serialized once (by the publish script), parsed once per message
+   per process, and the same string object is queued for every client (no per-client re-encode;
+   the WebSocket library still UTF-8-encodes and frames it per socket). If
    the connection drops, the hub reconnects and replays each socket from its own last-sent seq.
+
+10. **A dedicated synthetic channel for load tests** (`loadtest:{name}`, `WS_LOADTEST_ENABLED`, refused in production)
+    so `make ws-load` never writes to a real market's channel.
 
 ## Deployment requirement: app and API must be the same site
 
@@ -79,5 +92,7 @@ This is on the Phase 8 checklist (`docs/phases/phase-8.md`).
   always equals the database.
 * One gateway process is CPU-bound by per-frame Python overhead (measured in `docs/phases/phase-5.md`);
   capacity scales with replicas because Redis is the only shared state.
+* Redis must keep channel keys (no per-key eviction) and, if its state matters across restarts, persistence;
+  otherwise every client re-snapshots after a restart, which the epoch makes safe.
 * Streams cost Redis memory (bounded by the count caps, independent of traffic). `user:` streams hold
   private order data inside the Redis trust boundary (threat model W-9).

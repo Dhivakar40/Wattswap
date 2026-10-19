@@ -139,7 +139,9 @@ Assets: other users' order/fill streams, the integrity of the book and price sho
 | W-7 | Reordered, duplicated or missing messages make a client show a wrong book | Atomic seq+retain+publish script; clients require `seq == last+1`, drop duplicates, resync on gap; deltas idempotent; snapshot seq read before data; book publish serialised per market | `test_concurrent_publishers_*`, `test_lost_message_is_detected_*`, `test_concurrent_book_flushes_*` |
 | W-8 | Token leakage through URLs or logs | Cookie-only auth; no token in the query string or first message | by design (ADR-009) |
 | W-9 | Private order data in Redis streams | Redis is inside the trust boundary (not exposed; auth + network policy in production); user streams are short (30 min / 1 000 msgs) | n/a |
-| W-10 | Redis reset replays the wrong history to a resuming client | `ahead_of_head` detection and gap-checked replay; no stream epoch yet (known limitation) | `test_resume_ahead_of_head_*` |
+| W-10 | Redis reset: a resuming or connected client trusts stale state, or silently drops the restarted seqs as duplicates | Per-channel stream **epoch** in every envelope/snapshot/resume; mismatch => `resync: epoch_changed` (also on a live socket); clients never compare seqs across epochs | `test_redis_flush_mid_session_is_detected_and_the_client_resyncs`, `test_a_flush_while_disconnected_*`, `test_a_new_epoch_is_never_mistaken_for_duplicates` |
+| W-11 | Insecure defaults when `API_ENV` is forgotten (dev secret, missing-Origin sockets, silent chain failures) | `API_ENV` defaults to `production`; every reader behaves strictly when it is unset | `test_unset_api_env_behaves_as_production_everywhere_it_is_read` |
+| W-12 | The dev-only `loadtest:` channel used as a free broadcast channel | Off unless `WS_LOADTEST_ENABLED`; boot refuses it in production | `test_loadtest_channel_is_refused_unless_enabled`, config test |
 
 ## Known limitations / out of scope for Phase 1
 

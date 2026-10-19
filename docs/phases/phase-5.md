@@ -225,9 +225,22 @@ Reading: a single gateway fans out ~4–5 k frames/s before queueing delay shows
 
 ## Known limitations / tech debt
 
-- No stream epoch: a Redis flush followed by re-publishing past a client's old seq could replay wrong history (ADR-009, W-10).
+- The stream epoch covers loss of a channel's whole state (flush/restart); Redis must not evict individual keys (`noeviction`, Phase 8 checklist).
 - Per-IP connection cap uses the socket peer address; behind a reverse proxy every client shares one IP (Phase 8 checklist).
 - Single gateway process is CPU-bound near 5 k frames/s; scale by replicas. Per-socket message coalescing is not implemented (book messages are state-replacing, so it would be safe to add).
 - Heartbeat liveness for a client that only reads is its `pong` replies; a client must answer pings.
 - CORS exposure of `X-Channel-Seq` verified by headers, not by a browser.
-- The load tool publishes synthetic `loadtest` messages onto the dev stack's real `orderbook:` channel.
+
+## Pre-merge changes (second review)
+
+1. **Stream epoch.** Per-channel random epoch (created with the channel state, recreated after loss) in every envelope, in `subscribed`/`resync`, in REST snapshots (`epoch` body field / `X-Channel-Epoch` header, exposed via CORS) and in every `resume` entry (`{epoch, seq}`; a bare seq is now a protocol error). A mismatch answers `resync: epoch_changed`; a *connected* socket gets the same frame before the first message of a new epoch. `dev/ws_sync.py`, `docs/api.md`, ADR-009 and threat model (W-10) updated. Test: `test_redis_flush_mid_session_is_detected_and_the_client_resyncs` flushes Redis under a live socket and shows the client detecting the change and re-snapshotting (plus unit tests that a new epoch is never mistaken for duplicates, and flush-while-disconnected).
+2. **`API_ENV` defaults to `production`.** The `model_fields_set` special case is gone. Set to `development` explicitly in `.env.example`, docker-compose (literal, not `${API_ENV:-development}`) and the Makefile (host-side tools); the test suite sets `test` in `tests/conftest.py`. `test_unset_api_env_behaves_as_production_everywhere_it_is_read` covers every reader: config validation (dev JWT secret refused), the loadtest channel, the `/ws` missing-Origin policy, `_build_chain`, `build_pricing`, and `pricing.run`.
+3. **Load tool uses a dedicated channel** `loadtest:run-<timestamp>` (new dev-only kind, `WS_LOADTEST_ENABLED`, refused when `API_ENV=production`, keys deleted afterwards). No real market channel is written to.
+4. **Serialization audit.** The envelope is JSON-serialized once (in the publish script). The hub parses it once per message to read `(epoch, seq)` and passes the *same string object* to every client; nothing is encoded per client in our code (`test_one_parse_and_one_shared_string_for_all_clients` counts one parse and one shared object for 50 clients). The WebSocket library still UTF-8-encodes and frames the text per socket; that cannot be shared without switching to binary frames. So there was nothing to fix, but the load test was re-run because the hot path changed (epoch parse):
+
+| Topology (500 clients, 10 msg/s, 20 s) | p50 | p95 | Lost |
+|---|---|---|---|
+| 1 replica, three runs | 50–56 ms | **272 / 353 / 424 ms** (over the 250 ms budget) | 0 |
+| 2 replicas | 52 ms | **155 ms** | 0 |
+
+The epoch added no measurable cost; the single-replica result is unchanged within run-to-run noise (earlier: 437 ms).
